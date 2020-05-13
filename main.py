@@ -25,14 +25,14 @@ class Configs:
     def __init__(self, name):
         self.name = name
         self.lr = 5e-4
-        self.num_epochs = 100000
+        self.num_epochs = 10000
         self.base_i0 = 1000
         self.n_samples = 200
         self.k_days = 20
         self.label_days = 20
         self.strategy_days = 250
         self.adaptive_count = 10
-        self.es_max_count = -1 # 50
+        self.es_max_count = 50
         self.retrain_days = 60
         self.test_days = 500  # test days
         self.init_train_len = 500
@@ -518,7 +518,7 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    name = 'apptest_adv_6'
+    name = 'apptest_adv_7'
     c = Configs(name)
 
     str_ = c.export()
@@ -536,7 +536,7 @@ def main(testmode=False):
     model.train()
     model.to(tu.device)
 
-    train(c, model, optimizer, sampler, t=3000)
+    train(c, model, optimizer, sampler)
     # train(c, model, optimizer, sampler, t=1700)
 
     backtest(c, sampler)
