@@ -52,7 +52,7 @@ class Configs:
     def init_weight(self):
         if self.datatype == 'app':
             self.cash_idx = 3
-            self.base_weight = [0.7, 0.2, 0.1, 0.]
+            self.base_weight = [0.699, 0.2, 0.1, 0.001]
             # self.base_weight = None
         else:
             self.cash_idx = 0
@@ -489,7 +489,7 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
                     c.es_count = 0; c.min_eval_loss = 99999
 
                     for key in losses_eval_dict.keys():
-                        if key in ['entropy', 'cost']:
+                        if key in ['entropy', 'cost', 'wgt_guide']:
                             c.loss_wgt[key] = 0.1
                         elif key in ['mdd_pf']:
                             c.loss_wgt[key] = 1000

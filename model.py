@@ -142,23 +142,23 @@ class MyModel(Module):
         #     add_info = add_info / add_info.sum(dim=1, keepdim=True)
         # x = torch.cat([pred_mu, pred_sigma, add_info], dim=-1)
 
-        min_wgt = torch.FloatTensor([[0.011, 0.011, 0.011, 0.011]]).repeat(len(x), 1).to(x.device)
+        min_wgt = torch.zeros_like(features['wgt'], dtype=torch.float32).to(x.device) + 0.001
 
         x = torch.cat([pred_mu, pred_sigma, features['wgt']], dim=-1)
         x = self.aa_hidden_layer(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
-        x = F.elu(x + features['wgt'], 0.01) + min_wgt
+        x = F.elu(x + features['wgt'], 0.01) + min_wgt + 0.01
         # x = F.softmax(x)
         x = x / x.sum(dim=1, keepdim=True)
 
-        guide_wgt = torch.FloatTensor([[0.7, 0.2, 0.1, 0.]]).repeat(len(x), 1).to(x.device)
+        guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
 
         if labels is not None:
             losses_dict = dict()
             # losses_dict['logy_pf'] = -(x * labels['logy']).sum()
             losses_dict['logy_pf'] = -((x - features['wgt']) * labels['logy']).sum()
-            losses_dict['mdd_pf'] = F.relu(-(x * labels['logy']).sum(dim=1) - 0.05).sum()
+            losses_dict['mdd_pf'] = F.elu(-(x * labels['logy']).sum(dim=1) - 0.05, 0.001).sum()
             losses_dict['logy'] = self.loss_func_logy(pred_mu, labels['logy'])
             losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
             losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])
