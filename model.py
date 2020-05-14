@@ -58,7 +58,7 @@ class MyModel(Module):
             self.hidden_layers.append(XLinear(h_in, h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_in, out_dim)
+        self.out_layer = XLinear(h_out, out_dim)
 
         # asset allocation
         self.aa_hidden_layer = XLinear(out_dim * 3, out_dim)
@@ -76,8 +76,8 @@ class MyModel(Module):
 
         for h_layer in self.hidden_layers:
             x = h_layer(x)
+            x = F.leaky_relu(x)
             x = F.dropout(x, p=self.dropout_r, training=mask)
-            x = F.relu(x)
 
         x = self.out_layer(x)
         return x
@@ -142,17 +142,26 @@ class MyModel(Module):
         #     add_info = add_info / add_info.sum(dim=1, keepdim=True)
         # x = torch.cat([pred_mu, pred_sigma, add_info], dim=-1)
 
-        min_wgt = torch.zeros_like(features['wgt'], dtype=torch.float32).to(x.device) + 0.001
+        # min_wgt = torch.zeros_like(features['wgt'], dtype=torch.float32).to(x.device) + 0.001
 
         x = torch.cat([pred_mu, pred_sigma, features['wgt']], dim=-1)
         x = self.aa_hidden_layer(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
-        x = F.elu(x + features['wgt'], 0.01) + min_wgt + 0.01
+        # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
         # x = F.softmax(x)
+        x = F.sigmoid(x) + 0.001
         x = x / x.sum(dim=1, keepdim=True)
 
-        guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
+        if torch.isnan(x).sum() > 0:
+            for n, p in list(self.named_parameters()):
+                print(n, '\nval:\n', p, '\ngrad:\n', p.grad)
+
+            return False
+
+        # guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
+        guide_wgt = torch.FloatTensor([[0.7, 0.2, 0.1, 0.0]]).repeat(len(x), 1).to(x.device)
+
 
         if labels is not None:
             losses_dict = dict()

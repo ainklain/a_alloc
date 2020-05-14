@@ -25,16 +25,16 @@ class Configs:
     def __init__(self, name):
         self.name = name
         self.lr = 5e-4
-        self.num_epochs = 10000
+        self.num_epochs = 30000
         self.base_i0 = 1000
         self.n_samples = 200
         self.k_days = 20
         self.label_days = 20
-        self.strategy_days = 250
-        self.adaptive_count = 10
+        self.strategy_days = 240
+        self.adaptive_count = 5
         self.es_max_count = 50
-        self.retrain_days = 60
-        self.test_days = 500  # test days
+        self.retrain_days = 240
+        self.test_days = 480  # test days
         self.init_train_len = 500
         self.normalizing_window = 500  # norm windows for macro data
         self.adaptive_flag = True
@@ -52,7 +52,7 @@ class Configs:
     def init_weight(self):
         if self.datatype == 'app':
             self.cash_idx = 3
-            self.base_weight = [0.699, 0.2, 0.1, 0.001]
+            self.base_weight = [0.7, 0.2, 0.1, 0.0]
             # self.base_weight = None
         else:
             self.cash_idx = 0
@@ -294,6 +294,7 @@ def plot(wgt_base, wgt_result, y_df_after, outpath='./out/'):
     # features, labels = test_features, test_labels; wgt = wgt_result
     # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
 
+    fig = plt.figure()
     y_df_after.index = pd.to_datetime(y_df_after.index)
     plt.plot((1 + y_df_after).cumprod(axis=0))
     plt.legend(labels=y_df_after.columns)
@@ -310,7 +311,10 @@ def backtest(configs, sampler):
     wgt_result = np.zeros_like(wgt_base)
 
     # 20 days
-    y_next = np.zeros([(sampler.max_len - c.base_i0) // c.k_days + 1, sampler.n_labels])
+    n_datapoint = c.retrain_days // c.k_days
+    d, r = divmod(sampler.max_len - c.base_i0, c.retrain_days)
+
+    y_next = np.zeros([d * n_datapoint + r // c.k_days + 1, sampler.n_labels])
     wgt_base_calc = np.zeros_like(y_next)
     wgt_result_calc = np.zeros_like(y_next)
     wgt_label_calc = np.zeros_like(y_next)
@@ -324,7 +328,6 @@ def backtest(configs, sampler):
 
     ii = 0
     for t in range(c.base_i0, sampler.max_len, c.retrain_days):
-
         _, _, dataset, _, _ = sampler.get_batch(t)
         features, labels = tu.to_device(tu.device, to_torch(dataset))
 
@@ -337,13 +340,12 @@ def backtest(configs, sampler):
         wgt_result[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(wgt_test)[:c.retrain_days, :]
         wgt_base[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(features['wgt'])[:c.retrain_days, :]
 
-        n_datapoint = c.retrain_days // c.k_days
-        y_next[ii:(ii + n_datapoint), :] = tu.np_ify(labels['logy_for_calc'])[:c.retrain_days:c.k_days, :]
-        wgt_base_calc[ii:(ii + n_datapoint), :] = tu.np_ify(features['wgt'])[:c.retrain_days:c.k_days, :]
-        wgt_label_calc[ii:(ii + n_datapoint), :] = tu.np_ify(labels['wgt'])[:c.retrain_days:c.k_days, :]
+        y_next[ii:(ii + n_datapoint), :] = tu.np_ify(labels['logy_for_calc'])[::c.k_days, :][:n_datapoint, :]
+        wgt_base_calc[ii:(ii + n_datapoint), :] = tu.np_ify(features['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
+        wgt_label_calc[ii:(ii + n_datapoint), :] = tu.np_ify(labels['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
 
-        wgt_result_calc[ii:(ii + n_datapoint), :] = tu.np_ify(wgt_test)[:c.retrain_days:c.k_days, :]
-        wgt_date += list(sampler.add_infos['date'][t:(t+c.retrain_days):c.k_days])
+        wgt_result_calc[ii:(ii + n_datapoint), :] = tu.np_ify(wgt_test)[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
+        wgt_date += list(sampler.add_infos['date'][t::c.k_days][:n_datapoint])
         # schedule = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=10, last_epoch=-1)
         ii += n_datapoint
 
@@ -466,7 +468,7 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
                               , suffix=suffix
                               , outpath=outpath_t)
 
-                if ep > 0:
+                if ep > 0 and ep % c.plot_freq == 0:
                     x_len = (ep // 10000 + 1) * 10000
                     sampling_freq = (ep // 10000 + 1) * 100
                     fig = plt.figure()
@@ -483,7 +485,8 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
                 if c.es_count > c.adaptive_count and adaptive_flag:
                     adaptive_flag = False
-                    optimizer.param_groups[0]['lr'] = c.lr * 10
+                    optimizer.param_groups[0]['lr'] = c.lr * 20
+                    # optimizer.param_groups[0]['lr'] = c.lr * 10
 
                     c.es_max = c.es_max_count
                     c.es_count = 0; c.min_eval_loss = 99999
@@ -518,7 +521,7 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    name = 'apptest_adv_7'
+    name = 'apptest_adv_12'
     c = Configs(name)
 
     str_ = c.export()
