@@ -1,7 +1,13 @@
-import numpy as np
-import torch
+
 import pandas as pd
 import matplotlib.pyplot as plt
+
+import os
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import init, Module, functional as F
+from torch.nn.modules import Linear
 
 import torch_utils as tu
 
@@ -15,6 +21,74 @@ except AttributeError:
     def profile(func): return func
     builtins.profile = profile
 # # #### profiler end ####
+
+
+class Configs:
+    def __init__(self, name):
+        self.name = name
+        self.lr = 5e-4
+        self.num_epochs = 30000
+        self.base_i0 = 1000
+        self.n_samples = 200
+        self.k_days = 20
+        self.label_days = 20
+        self.strategy_days = 250
+        self.adaptive_count = 5
+        self.adaptive_lrx = 10 # learning rate * 배수
+        self.es_max_count = 50
+        self.retrain_days = 240
+        self.test_days = 480  # test days
+        self.init_train_len = 500
+        self.normalizing_window = 500  # norm windows for macro data
+        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
+        self.adaptive_flag = True
+        self.n_pretrain = 20
+
+        self.datatype = 'app'
+
+        self.cost_rate = 0.003
+        self.plot_freq = 1000
+
+        self.init()
+        self.set_path()
+
+    def init(self):
+        self.init_weight()
+        self.init_loop()
+
+    def init_weight(self):
+        if self.datatype == 'app':
+            self.cash_idx = 3
+            self.base_weight = [0.7, 0.2, 0.1, 0.0]
+            # self.base_weight = None
+        else:
+            self.cash_idx = 0
+            self.base_weight = None
+
+    def set_path(self):
+        self.outpath = './out/{}/'.format(self.name)
+        os.makedirs(self.outpath, exist_ok=True)
+
+    def init_loop(self):
+        adaptive_flag = self.adaptive_flag
+        if adaptive_flag:
+            self.es_max = -1
+        else:
+            self.es_max = self.es_max_count
+
+        self.min_eval_loss = 999999
+        self.es_count = 0
+        self.loss_wgt = {'logy_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
+        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': -1.}
+
+        return adaptive_flag
+
+    def export(self):
+        return_str = ""
+        for key in self.__dict__.keys():
+            return_str += "{}: {}\n".format(key, self.__dict__[key])
+
+        return return_str
 
 
 def log_y_nd(log_p, n, label=False):
@@ -205,6 +279,24 @@ def to_torch(dataset):
     return [features_dict, labels_dict]
 
 
+def main():
+
+    name = 'apptest_adv_15'
+    c = Configs(name)
+
+    str_ = c.export()
+    with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
+        f.write(str_)
+
+    # data processing
+    features_dict, labels_dict, add_info = get_data(configs=c)
+    sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
+
+    model = MyModel(sampler.n_features + 2, sampler.n_labels, cost_rate=c.cost_rate)
+
+
+
+
 # sampler = Sampler(features, labels, init_train_len=500, label_days=130)
 # train_dataset, eval_dataset, test_dataset = sampler.get_batch(1000)
 class Sampler:
@@ -227,7 +319,26 @@ class Sampler:
 
     @property
     def max_len(self):
-        return len(self.add_infos['date'])- 1
+        return len(self.add_infos['date']) - 1
+
+    def sample_trajectory(self, model, dataset):
+        traj = list()
+        features, labels = to_torch(dataset)
+        x = torch.cat([features['idx'], features['macro']], dim=-1)
+        pf_r = torch.ones(len(x) // self.label_days + 1)
+        pf_mdd = torch.zeros_like(pf_r)
+        r = 0
+        for i, t in enumerate(range(0, len(x)-1, self.label_days)):
+            s0 = torch.cat([x[t], pf_r[i:(i+1)], pf_mdd[i:(i+1)]])
+            a = model.policy(s0)
+            pf_r[i+1] = pf_r[i] * (1. + (a * (torch.exp(labels['logy_for_calc'][t])-1.)).sum())
+            pf_mdd[i+1] = pf_r[i+1] / pf_r[:(i+2)].max() - 1.
+            if pf_mdd[i+1] <= -0.1:
+                r = -1
+                break
+
+            s1 =
+            traj.append([s0, a, ])
 
     def get_batch(self, i):
         train_data_len = 1000
@@ -249,7 +360,8 @@ class Sampler:
         test_start_i = test_base_i
         test_end_i = min(i + self.test_days, self.max_len)
 
-        train_idx = np.random.choice(np.arange(train_start_i, train_end_i), train_end_i-train_start_i, replace=False)
+        # train_idx = np.random.choice(np.arange(train_start_i, train_end_i), train_end_i-train_start_i, replace=False)
+        train_idx = np.arange(train_start_i, train_end_i)
         features_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
         labels_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
         train_dataset = (features_train, labels_train)
@@ -275,8 +387,112 @@ class Sampler:
         return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
 
 
+class XLinear(Module):
+    def __init__(self, in_dim, out_dim, bias=True):
+        super(XLinear, self).__init__()
+        self.layer = Linear(in_dim, out_dim, bias)
+        init.xavier_uniform_(self.layer.weight)
+        if bias:
+            init.zeros_(self.layer.bias)
+
+    def forward(self, x):
+        return self.layer(x)
 
 
+class MyModel(Module):
+    def __init__(self, in_dim, out_dim, hidden_dim=[72, 48, 32], dropout_r=0.5, cost_rate=0.003):
+        super(MyModel, self).__init__()
+        self.cost_rate = cost_rate
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.dropout_r = dropout_r
+        self.hidden_layers = nn.ModuleList()
 
+        h_in = in_dim
+        for h_out in hidden_dim:
+            self.hidden_layers.append(XLinear(h_in, h_out))
+            h_in = h_out
 
+        self.out_layer = XLinear(h_out, out_dim)
+
+        # asset allocation
+        self.aa_hidden_layer = XLinear(out_dim * 2, out_dim)
+        self.aa_out_layer = XLinear(out_dim, out_dim)
+
+        self.loss_func_logy = nn.MSELoss()
+
+        self.optim_state_dict = self.state_dict()
+        # self.optim_
+    # def init_weight(self):
+    #     return torch.ones_like()
+
+    def forward(self, x, sample=True):
+        mask = self.training or sample
+
+        for h_layer in self.hidden_layers:
+            x = h_layer(x)
+            x = F.leaky_relu(x)
+            x = F.dropout(x, p=self.dropout_r, training=mask)
+
+        x = self.out_layer(x)
+        return x
+
+    def sample_predict(self, x, n_samples):
+        self.train()
+        # Just copies type from x, initializes new vector
+        # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
+        #
+        # for i in range(n_samples):
+        #     y = self.forward(x, sample=True)
+        #     predictions[i] = y
+
+        predictions = x.unsqueeze(0).repeat(n_samples, 1, 1)
+        predictions = self.forward(predictions, sample=True)
+        return predictions
+
+    def adversarial_noise(self, features, labels):
+        for key in features.keys():
+            features[key].requires_grad = True
+
+        for key in labels.keys():
+            labels[key].requires_grad = True
+
+        pred, losses, _, _, _ = self.forward_with_loss(features, labels, n_samples=100, loss_wgt=None)
+
+        losses.backward(retain_graph=True)
+        features_grad = dict()
+        features_perturbed = dict()
+        for key in features.keys():
+            features_grad[key] = torch.sign(features[key].grad)
+            sample_sigma = torch.std(features[key], axis=[0], keepdims=True)
+            eps = 0.01
+            scaled_eps = eps * sample_sigma  # [1, 1, n_features]
+
+            features_perturbed[key] = features[key] + scaled_eps * features_grad[key]
+            features[key].grad.zero_()
+
+        return features_perturbed
+
+    @profile
+    def policy(self, x, features_wgt=None, n_samples=1000):
+        # features, labels=  train_features, train_labels
+        pred = self.sample_predict(x, n_samples=n_samples)
+        pred_mu = torch.mean(pred, dim=0)
+        pred_sigma = torch.std(pred, dim=0)
+
+        # x = torch.cat([pred_mu, pred_sigma, features_wgt], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma], dim=-1)
+        x = self.aa_hidden_layer(x)
+        x = F.relu(x)
+        x = self.aa_out_layer(x)
+        x = torch.sigmoid(x) + 0.001
+        x = x / x.sum(dim=1, keepdim=True)
+
+        return x
+
+    def save_to_optim(self):
+        self.optim_state_dict = self.state_dict()
+
+    def load_from_optim(self):
+        self.load_state_dict(self.optim_state_dict)
 

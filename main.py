@@ -30,24 +30,29 @@ class Configs:
         self.n_samples = 200
         self.k_days = 20
         self.label_days = 20
-        self.strategy_days = 240
+        self.strategy_days = 250
         self.adaptive_count = 5
+        self.adaptive_lrx = 10 # learning rate * 배수
         self.es_max_count = 50
         self.retrain_days = 240
         self.test_days = 480  # test days
         self.init_train_len = 500
         self.normalizing_window = 500  # norm windows for macro data
+        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.n_pretrain = 20
 
         self.datatype = 'app'
-        self.init_weight()
 
         self.cost_rate = 0.003
-
         self.plot_freq = 1000
 
+        self.init()
         self.set_path()
+
+    def init(self):
+        self.init_weight()
+        self.init_loop()
 
     def init_weight(self):
         if self.datatype == 'app':
@@ -72,6 +77,7 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'logy_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
+        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.01}
 
         return adaptive_flag
 
@@ -168,7 +174,7 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     fig.savefig(os.path.join(outpath, 'test_wgt_{}{}.png'.format(ep, suffix)))
     plt.close(fig)
 
-    y_next = tu.np_ify(labels['logy_for_calc'])[::k_days, :]
+    y_next = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[::k_days, :]
     wgt_base_calc = wgt_base[::k_days, :]
     wgt_result_calc = wgt_result[::k_days, :]
     wgt_label_calc = wgt_label[::k_days, :]
@@ -340,7 +346,7 @@ def backtest(configs, sampler):
         wgt_result[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(wgt_test)[:c.retrain_days, :]
         wgt_base[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(features['wgt'])[:c.retrain_days, :]
 
-        y_next[ii:(ii + n_datapoint), :] = tu.np_ify(labels['logy_for_calc'])[::c.k_days, :][:n_datapoint, :]
+        y_next[ii:(ii + n_datapoint), :] = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[::c.k_days, :][:n_datapoint, :]
         wgt_base_calc[ii:(ii + n_datapoint), :] = tu.np_ify(features['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
         wgt_label_calc[ii:(ii + n_datapoint), :] = tu.np_ify(labels['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
 
@@ -485,26 +491,22 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
                 if c.es_count > c.adaptive_count and adaptive_flag:
                     adaptive_flag = False
-                    optimizer.param_groups[0]['lr'] = c.lr * 20
+                    optimizer.param_groups[0]['lr'] = c.lr * c.adaptive_lrx
                     # optimizer.param_groups[0]['lr'] = c.lr * 10
 
                     c.es_max = c.es_max_count
                     c.es_count = 0; c.min_eval_loss = 99999
 
                     for key in losses_eval_dict.keys():
-                        if key in ['entropy', 'cost', 'wgt_guide']:
-                            c.loss_wgt[key] = 0.1
-                        elif key in ['mdd_pf']:
-                            c.loss_wgt[key] = 1000
-                        elif key in ['wgt_guide', 'wgt2', 'wgt']:
-                            c.loss_wgt[key] = 0
+                        if c.adaptive_loss_wgt[key] >= 0:
+                            c.loss_wgt[key] = c.adaptive_loss_wgt[key]
 
                         if c.loss_wgt[key] == 0:
                             continue
+
                         val = np.abs(tu.np_ify(losses_eval_dict[key]))
-                        if val > 10:
-                            # c.loss_wgt[key] = 0
-                            c.loss_wgt[key] = 1. / float(val * c.loss_wgt[key])
+                        if c.loss_wgt[key] < 0 and val > 10:
+                            c.loss_wgt[key] = 10. / float(val * abs(c.loss_wgt[key]))
 
                 if c.es_max > 0 and c.es_count >= c.es_max:
                     model.load_from_optim()
@@ -521,7 +523,7 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    name = 'apptest_adv_12'
+    name = 'apptest_adv_16'
     c = Configs(name)
 
     str_ = c.export()
@@ -530,7 +532,7 @@ def main(testmode=False):
 
     # data processing
     features_dict, labels_dict, add_info = get_data(configs=c)
-    sampler = Sampler(features_dict, labels_dict, add_info, init_train_len=c.init_train_len, label_days=c.label_days, test_days=c.test_days)
+    sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
 
     # model & optimizer
     model = MyModel(sampler.n_features, sampler.n_labels, cost_rate=c.cost_rate)
