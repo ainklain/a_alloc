@@ -118,33 +118,14 @@ class MyModel(Module):
 
         return features_perturbed
 
-    @profile
-    def forward_with_loss(self, features, labels=None, n_samples=1000, loss_wgt=None):
-        # features, labels=  train_features, train_labels
+
+    def run(self, features, wgt, n_samples):
         x = torch.cat([features['idx'], features['macro']], dim=-1)
         pred = self.sample_predict(x, n_samples=n_samples)
         pred_mu = torch.mean(pred, dim=0)
         pred_sigma = torch.std(pred, dim=0)
 
-        # if labels is not None:
-        #     error_correction = torch.zeros_like(pred_mu) + torch.abs(labels['logy'] - pred_mu)
-        # else:
-        #     error_correction = torch.zeros_like(pred_mu)
-
-
-        # rand_val = np.random.random()
-        # if rand_val >= 0.5:
-        #     add_info = features['wgt']
-        # elif rand_val >= 0.1:
-        #     add_info = guide_wgt
-        # else:
-        #     add_info = torch.rand_like(guide_wgt)
-        #     add_info = add_info / add_info.sum(dim=1, keepdim=True)
-        # x = torch.cat([pred_mu, pred_sigma, add_info], dim=-1)
-
-        # min_wgt = torch.zeros_like(features['wgt'], dtype=torch.float32).to(x.device) + 0.001
-
-        x = torch.cat([pred_mu, pred_sigma, features['wgt']], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma, wgt], dim=-1)
         x = self.aa_hidden_layer(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
@@ -153,6 +134,35 @@ class MyModel(Module):
         x = F.sigmoid(x) + 0.001
         x = x / x.sum(dim=1, keepdim=True)
 
+        return x, pred_mu, pred_sigma
+
+    @profile
+    def forward_with_loss(self, features, labels=None, n_samples=1000, loss_wgt=None, features_prev=None):
+        # features, labels=  train_features, train_labels
+
+        # x = torch.cat([features['idx'], features['macro']], dim=-1)
+        # pred = self.sample_predict(x, n_samples=n_samples)
+        # pred_mu = torch.mean(pred, dim=0)
+        # pred_sigma = torch.std(pred, dim=0)
+        #
+        #
+        # x = torch.cat([pred_mu, pred_sigma, features['wgt']], dim=-1)
+        # x = self.aa_hidden_layer(x)
+        # x = F.relu(x)
+        # x = self.aa_out_layer(x)
+        # # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
+        # # x = F.softmax(x)
+        # x = F.sigmoid(x) + 0.001
+        # x = x / x.sum(dim=1, keepdim=True)
+
+        if features_prev is not None:
+            with torch.set_grad_enabled(False):
+                prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
+        else:
+            prev_x = features['wgt']
+
+        x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
+
         if torch.isnan(x).sum() > 0:
             for n, p in list(self.named_parameters()):
                 print(n, '\nval:\n', p, '\ngrad:\n', p.grad)
@@ -160,19 +170,23 @@ class MyModel(Module):
             return False
 
         # guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
-        guide_wgt = torch.FloatTensor([[0.7, 0.2, 0.1, 0.0]]).repeat(len(x), 1).to(x.device)
-
+        if np.random.rand() > 0.5:
+            guide_wgt = torch.FloatTensor([[0.7, 0.2, 0.1, 0.0]]).repeat(len(x), 1).to(x.device)
+        else:
+            guide_wgt = torch.rand_like(x).to(x.device)
+            guide_wgt = guide_wgt / guide_wgt.sum(dim=1, keepdim=True)
 
         if labels is not None:
             losses_dict = dict()
             # losses_dict['logy_pf'] = -(x * labels['logy']).sum()
             losses_dict['logy_pf'] = -((x - features['wgt']) * labels['logy']).sum()
-            losses_dict['mdd_pf'] = F.elu(-(x * labels['logy']).sum(dim=1) - 0.05, 0.001).sum()
+            losses_dict['mdd_pf'] = F.elu(-(x * labels['logy']).sum(dim=1) - 0.05, 0.0001).sum()
             losses_dict['logy'] = self.loss_func_logy(pred_mu, labels['logy'])
             losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
             losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])
             losses_dict['wgt_guide'] = nn.KLDivLoss(reduction='sum')(torch.log(x), guide_wgt)
-            losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
+            losses_dict['cost'] = torch.abs(x - prev_x).sum() * self.cost_rate
+            # losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
                 losses_dict['entropy'] = -HLoss()(x)

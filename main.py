@@ -31,11 +31,11 @@ class Configs:
         self.k_days = 20
         self.label_days = 20
         self.strategy_days = 250
-        self.adaptive_count = 5
+        self.adaptive_count = 0
         self.adaptive_lrx = 10 # learning rate * 배수
         self.es_max_count = 50
         self.retrain_days = 240
-        self.test_days = 480  # test days
+        self.test_days = 1000  # test days
         self.init_train_len = 500
         self.normalizing_window = 500  # norm windows for macro data
         self.use_accum_data = True # [sampler] 데이터 누적할지 말지
@@ -77,7 +77,7 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'logy_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.01}
+        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 5., 'entropy': 0.01}
 
         return adaptive_flag
 
@@ -418,13 +418,14 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
         # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1/10, last_epoch=-1)
 
         for ep in range(c.num_epochs):
-            train_features, train_labels = dataset['train']
+            train_features_prev, train_features, train_labels = dataset['train']
             if adv_train is True:
                 train_features = model.adversarial_noise(train_features, train_labels)
 
             _, losses_train, _, _, _ = model.forward_with_loss(train_features, train_labels
                                                                , n_samples=c.n_samples
-                                                               , loss_wgt=c.loss_wgt)
+                                                               , loss_wgt=c.loss_wgt
+                                                               , features_prev=train_features_prev)
 
             optimizer.zero_grad()
             losses_train.backward()
@@ -434,10 +435,11 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
             losses_dict['train'][ep] = float(losses_train)
 
             with torch.set_grad_enabled(False):
-                eval_features, eval_labels = dataset['eval']
+                eval_features_prev, eval_features, eval_labels = dataset['eval']
                 _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(eval_features, eval_labels
                                                                                  , n_samples=c.n_samples
-                                                                                 , loss_wgt=c.loss_wgt)
+                                                                                 , loss_wgt=c.loss_wgt
+                                                                                 , features_prev=eval_features_prev)
 
                 losses_eval = tu.np_ify(losses_eval)
 
@@ -458,15 +460,18 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
                 print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_train, losses_eval, str_))
 
-                _, losses_test, _, _, loss_test_dict = model.forward_with_loss(dataset['test'][0], dataset['test'][1]
+                test_features_prev, test_features, test_labels = dataset['test']
+                _, losses_test, _, _, loss_test_dict = model.forward_with_loss(test_features, test_labels
                                                                                , n_samples=c.n_samples
-                                                                               , loss_wgt=c.loss_wgt)
+                                                                               , loss_wgt=c.loss_wgt
+                                                                               , features_prev=test_features_prev)
 
                 losses_dict['test'][ep] = float(losses_test)
                 save_model(outpath_t, ep, model, optimizer)
                 suffix = "_t[{:2.2f}]e[{:2.2f}]test[{:2.2f}]".format(losses_train, losses_eval, losses_test)
                 if ep % c.plot_freq == 0:
-                    plot_each(ep, model, dataset['test_insample'][0], dataset['test_insample'][1]
+                    test_insample_features_prev, test_insample_features, test_insample_labels = dataset['test_insample']
+                    plot_each(ep, model, test_insample_features, test_insample_labels
                               , insample_boundary=insample_boundary
                               , guide_date=guide_date
                               , n_samples=c.n_samples
@@ -489,7 +494,7 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
                     fig.savefig(os.path.join(outpath_t, 'learning_curve_{}.png'.format(t)))
                     plt.close(fig)
 
-                if c.es_count > c.adaptive_count and adaptive_flag:
+                if adaptive_flag and (losses_eval < 2. or c.es_count >= c.adaptive_count):
                     adaptive_flag = False
                     optimizer.param_groups[0]['lr'] = c.lr * c.adaptive_lrx
                     # optimizer.param_groups[0]['lr'] = c.lr * 10
@@ -510,7 +515,8 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
                 if c.es_max > 0 and c.es_count >= c.es_max:
                     model.load_from_optim()
-                    plot_each(20000, model, dataset['test_insample'][0], dataset['test_insample'][1]
+                    test_insample_features_prev, test_insample_features, test_insample_labels = dataset['test_insample']
+                    plot_each(20000, model, test_insample_features, test_insample_labels
                               , insample_boundary=insample_boundary, guide_date=guide_date
                               , n_samples=c.n_samples, k_days=c.k_days
                               , suffix=suffix + "_{}".format(t), outpath=outpath_t)
@@ -523,7 +529,7 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    name = 'apptest_adv_16'
+    name = 'apptest_adv_20'
     c = Configs(name)
 
     str_ = c.export()
@@ -541,7 +547,7 @@ def main(testmode=False):
     model.train()
     model.to(tu.device)
 
-    train(c, model, optimizer, sampler)
+    train(c, model, optimizer, sampler, )
     # train(c, model, optimizer, sampler, t=1700)
 
     backtest(c, sampler)
