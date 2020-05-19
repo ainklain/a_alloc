@@ -31,14 +31,14 @@ class Configs:
         self.k_days = 20
         self.label_days = 20
         self.strategy_days = 250
-        self.adaptive_count = 0
+        self.adaptive_count = 5
         self.adaptive_lrx = 10 # learning rate * 배수
         self.es_max_count = 50
         self.retrain_days = 240
         self.test_days = 1000  # test days
         self.init_train_len = 500
         self.normalizing_window = 500  # norm windows for macro data
-        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
+        self.use_accum_data = False # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.n_pretrain = 20
 
@@ -46,6 +46,7 @@ class Configs:
 
         self.cost_rate = 0.003
         self.plot_freq = 1000
+        self.model_init_everytime = False
 
         self.init()
         self.set_path()
@@ -77,7 +78,7 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'logy_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 5., 'entropy': 0.01}
+        self.adaptive_loss_wgt = {'logy_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.01}
 
         return adaptive_flag
 
@@ -102,6 +103,8 @@ def calc_y(wgt0, y1, cost_r=0.):
 
 def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=None, n_samples=100, k_days=20, suffix='', outpath='./out/'):
     # ep=0; n_samples = 100; k_days = 20; model, features, labels, insample_boundary = main(testmode=True)
+    # features, labels = test_features, test_labels
+    # features, labels = test_insample_features, test_insamples_labels
 
     with torch.set_grad_enabled(False):
         wgt_test, losses_test, pred_mu_test, pred_sigma_test, _ = model.forward_with_loss(features, None, n_samples=n_samples)
@@ -174,6 +177,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     fig.savefig(os.path.join(outpath, 'test_wgt_{}{}.png'.format(ep, suffix)))
     plt.close(fig)
 
+    # #######################
+
     y_next = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[::k_days, :]
     wgt_base_calc = wgt_base[::k_days, :]
     wgt_result_calc = wgt_result[::k_days, :]
@@ -184,28 +189,24 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
     active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
 
-    y_base = np.sum((1+y_next) * wgt_base_calc, axis=1).cumprod()
-    y_port = np.sum((1+y_next) * wgt_result_calc, axis=1).cumprod()
-    y_label = np.sum((1+y_next) * wgt_label_calc, axis=1).cumprod()
-    y_eq = np.mean(1+y_next, axis=1).cumprod()
-    y_guide = np.sum((1+y_next) * np.array([0.7, 0.2, 0.1, 0.0]), axis=1).cumprod()
+    y_base = np.insert(np.sum((1+y_next) * wgt_base_calc, axis=1), 0, 1.)
+    y_port = np.insert(np.sum((1+y_next) * wgt_result_calc, axis=1), 0, 1.)
+    y_label = np.insert(np.sum((1+y_next) * wgt_label_calc, axis=1), 0, 1.)
+    y_eq = np.insert(np.mean(1+y_next, axis=1), 0, 1.)
+    y_guide = np.insert(np.sum((1+y_next) * np.array([0.7, 0.2, 0.1, 0.0]), axis=1), 0, 1.)
 
-    y_base = y_base / y_base[0]
-    y_port = y_port / y_port[0]
-    y_label = y_label / y_label[0]
-    y_eq = y_eq / y_eq[0]
-    y_guide = y_guide / y_guide[0]
 
     x = np.arange(len(y_base))
 
     fig = plt.figure()
     ax = plt.gca()
-    l_base, = plt.plot(x, y_base)
-    l_port, = plt.plot(x, y_port)
-    l_label, = plt.plot(x, y_label)
-    l_eq, = plt.plot(x, y_eq)
-    l_guide, = plt.plot(x, y_guide)
-    plt.legend(handles=(l_base, l_port, l_label, l_eq, l_guide), labels=('base', 'port', 'label', 'eq', 'guide'))
+    l_base, = plt.plot(x, y_base.cumprod())
+    l_port, = plt.plot(x, y_port.cumprod())
+    l_label, = plt.plot(x, y_label.cumprod())
+    l_eq, = plt.plot(x, y_eq.cumprod())
+    l_guide, = plt.plot(x, y_guide.cumprod())
+    plt.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
+    # plt.legend(handles=(l_base, l_port, l_label, l_eq, l_guide), labels=('base', 'port', 'label', 'eq', 'guide'))
     if insample_boundary is not None:
         plt.axvline(insample_boundary[0] / k_days)
         plt.axvline(insample_boundary[1] / k_days)
@@ -232,13 +233,16 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
 
     fig = plt.figure()
     ax = plt.gca()
-    l_port_guide, = plt.plot(x, y_port - y_guide)
-    l_port_base, = plt.plot(x, y_port - y_base)
-    l_port_eq, = plt.plot(x, y_port - y_eq)
-    l_label_base, = plt.plot(x, y_label - y_base)
-    l_label_guide, = plt.plot(x, y_label - y_guide)
+    l_port_guide, = plt.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
+    l_port_eq, = plt.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
+    # l_port_base, = plt.plot(x, y_port - y_base)
+    # l_port_eq, = plt.plot(x, y_port - y_eq)
+    # l_label_base, = plt.plot(x, y_label - y_base)
+    # l_label_guide, = plt.plot(x, y_label - y_guide)
 
-    plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
+    plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+
+    # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
     if insample_boundary is not None:
         plt.axvline(insample_boundary[0] / k_days)
         plt.axvline(insample_boundary[1] / k_days)
@@ -264,12 +268,12 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     plt.close(fig)
 
     fig = plt.figure()
-    plt.plot(x, active_share)
+    plt.plot(x[:-1], active_share)
     fig.savefig(os.path.join(outpath, 'test_activeshare_{}{}.png'.format(ep, suffix)))
     plt.close(fig)
 
 
-def plot(wgt_base, wgt_result, y_df_after, outpath='./out/'):
+def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
 
     n_asset = wgt_base.shape[1]
     viridis = cm.get_cmap('viridis', n_asset)
@@ -301,19 +305,28 @@ def plot(wgt_base, wgt_result, y_df_after, outpath='./out/'):
     # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
 
     fig = plt.figure()
+    y_df_before.index = pd.to_datetime(y_df_before.index)
+    plt.plot((1 + y_df_before).cumprod(axis=0))
+    plt.legend(labels=y_df_before.columns)
+
+    plt.yscale('log')
+    fig.savefig(os.path.join(outpath, 'test_y_before.png'))
+    plt.close(fig)
+
+    fig = plt.figure()
     y_df_after.index = pd.to_datetime(y_df_after.index)
     plt.plot((1 + y_df_after).cumprod(axis=0))
     plt.legend(labels=y_df_after.columns)
 
     plt.yscale('log')
-    fig.savefig(os.path.join(outpath, 'test_y.png'))
+    fig.savefig(os.path.join(outpath, 'test_y_after.png'))
     plt.close(fig)
 
 
 def backtest(configs, sampler):
     c = configs
 
-    wgt_base = np.zeros([sampler.max_len - c.base_i0, sampler.n_labels])
+    wgt_base = np.zeros([sampler.max_len - c.base_i0 - 1, sampler.n_labels])
     wgt_result = np.zeros_like(wgt_base)
 
     # 20 days
@@ -335,7 +348,7 @@ def backtest(configs, sampler):
     ii = 0
     for t in range(c.base_i0, sampler.max_len, c.retrain_days):
         _, _, dataset, _, _ = sampler.get_batch(t)
-        features, labels = tu.to_device(tu.device, to_torch(dataset))
+        features_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
 
         outpath_t = os.path.join(c.outpath, str(t))
         load_model(outpath_t, model, optimizer)
@@ -381,7 +394,7 @@ def backtest(configs, sampler):
                               'guide': y_guide['after_cost']}, index=y_date)
     y_df_after.to_csv(os.path.join(c.outpath, 'y_after_cost.csv'))
 
-    plot(wgt_base, wgt_result, y_df_after, c.outpath)
+    plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath)
 
 
 def train(configs, model, optimizer, sampler, t=None, adv_train=False):
@@ -389,8 +402,11 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
     if t is None:
         iter_ = range(c.base_i0, sampler.max_len, c.retrain_days)
+        t0 = c.base_i0
     else:
         iter_ = range(t, t+1)
+        t0 = t
+
     for t in iter_:
         # ################ config in loop ################
         outpath_t = os.path.join(c.outpath, str(t))
@@ -408,12 +424,18 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
         for key in dataset.keys():
             dataset[key] = tu.to_device(tu.device, to_torch(dataset[key]))
 
-        # ################ model & optimizer in loop  # load 무시, 매 타임 초기화 ################
-        model = MyModel(sampler.n_features, sampler.n_labels)
-        model.train()
-        model.to(tu.device)
+        if c.model_init_everytime:
+            # ################ model & optimizer in loop  # load 무시, 매 타임 초기화 ################
+            model = MyModel(sampler.n_features, sampler.n_labels)
+            model.train()
+            model.to(tu.device)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
+            optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
+        else:
+            model.train()
+            if t > t0:  # 최초 한번만 가이드 따라가기
+                c.adaptive_count = 0
+
         # schedule = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=c.lr, max_lr=1e-2, gamma=1, last_epoch=-1)
         # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1/10, last_epoch=-1)
 
@@ -529,7 +551,7 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    name = 'apptest_adv_20'
+    name = 'apptest_adv_25(model_successive_learn_es_lr)'
     c = Configs(name)
 
     str_ = c.export()
