@@ -135,6 +135,8 @@ def get_data(configs):
     else:
         idx_data = pd.read_csv('./data/index_data.txt', index_col=0, sep='\t')
 
+    min_begin_i = np.max(np.isnan(idx_data).sum(axis=0)) + 1
+
     print(idx_data.columns)
     merged = pd.merge(macro_data, idx_data, left_index=True, right_index=True)
     macro = merged.to_numpy()[:, :len(macro_data.columns)]
@@ -180,6 +182,7 @@ def get_data(configs):
     add_info['idx_list'] = idx_data.columns.to_numpy()
     add_info['macro_list'] = macro_data.columns.to_numpy()
     add_info['calc_days'] = calc_days
+    add_info['min_begin_i'] = min_begin_i
 
     # truncate unlabeled data
     label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_for_calc'])])
@@ -215,6 +218,8 @@ class Sampler:
         self.labels = labels
         self.add_infos = add_infos
         self.init_train_len = c.init_train_len
+
+        self.train_data_len = c.train_data_len
         self.label_days = c.label_days
         self.test_days = c.test_days
         self.use_accum_data = c.use_accum_data
@@ -231,15 +236,16 @@ class Sampler:
         return len(self.add_infos['date'])- 1
 
     def get_batch(self, i):
-        train_data_len = 1000
         assert i >= self.init_train_len
 
+
+
         if self.use_accum_data:
-            train_base_i = 0
+            train_base_i = self.add_infos['min_begin_i']
             eval_base_i = int(train_base_i + 0.6 * (i - train_base_i))
         else:
-            train_base_i = max(0, i - train_data_len)
-            eval_base_i = int(train_base_i + 0.6 * min(train_data_len, i - train_base_i))
+            train_base_i = max(self.add_infos['min_begin_i'], i - self.train_data_len)
+            eval_base_i = int(train_base_i + 0.6 * min(self.train_data_len, i - train_base_i))
 
         test_base_i = i
 

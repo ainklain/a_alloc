@@ -45,16 +45,23 @@ class XLinear(Module):
 
 
 class MyModel(Module):
-    def __init__(self, in_dim, out_dim, hidden_dim=[72, 48, 32], dropout_r=0.5, cost_rate=0.003):
+    def __init__(self, in_dim, out_dim, configs,):
         super(MyModel, self).__init__()
-        self.cost_rate = cost_rate
+        c = configs
+        self.cost_rate = c.cost_rate
         self.in_dim = in_dim
         self.out_dim = out_dim
-        self.dropout_r = dropout_r
+        self.dropout_r = c.dropout_r
+        self.random_guide_weight = c.random_guide_weight
+
+        if c.base_weight is not None:
+            self.guide_weight = torch.FloatTensor([c.base_weight])
+        else:
+            self.guide_weight = torch.ones(1, out_dim, dtype=torch.float32) / out_dim
         self.hidden_layers = nn.ModuleList()
 
         h_in = in_dim
-        for h_out in hidden_dim:
+        for h_out in c.hidden_dim:
             self.hidden_layers.append(XLinear(h_in, h_out))
             h_in = h_out
 
@@ -137,7 +144,7 @@ class MyModel(Module):
         return x, pred_mu, pred_sigma
 
     @profile
-    def forward_with_loss(self, features, labels=None, n_samples=1000, loss_wgt=None, features_prev=None):
+    def forward_with_loss(self, features, labels=None, n_samples=1000, loss_wgt=None, features_prev=None, is_train=True):
         # features, labels=  train_features, train_labels
 
         # x = torch.cat([features['idx'], features['macro']], dim=-1)
@@ -169,18 +176,22 @@ class MyModel(Module):
 
             return False
 
-        # guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
-        if np.random.rand() > 0.5:
-            guide_wgt = torch.FloatTensor([[0.7, 0.2, 0.1, 0.0]]).repeat(len(x), 1).to(x.device)
+        if is_train:
+            # guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
+            if np.random.rand() > self.random_guide_weight:
+                guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
+            else:
+                guide_wgt = torch.rand_like(x).to(x.device)
+                guide_wgt = guide_wgt / guide_wgt.sum(dim=1, keepdim=True)
         else:
-            guide_wgt = torch.rand_like(x).to(x.device)
-            guide_wgt = guide_wgt / guide_wgt.sum(dim=1, keepdim=True)
+            guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
 
         if labels is not None:
+            next_y = torch.exp(1 + labels['logy']) - 1.
             losses_dict = dict()
-            # losses_dict['logy_pf'] = -(x * labels['logy']).sum()
-            losses_dict['logy_pf'] = -((x - features['wgt']) * labels['logy']).sum()
-            losses_dict['mdd_pf'] = F.elu(-(x * labels['logy']).sum(dim=1) - 0.05, 0.0001).sum()
+            # losses_dict['y_pf'] = -(x * labels['logy']).sum()
+            losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()
+            losses_dict['mdd_pf'] = F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
             losses_dict['logy'] = self.loss_func_logy(pred_mu, labels['logy'])
             losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
             losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])
@@ -189,7 +200,7 @@ class MyModel(Module):
             # losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
-                losses_dict['entropy'] = HLoss()(x)
+                losses_dict['entropy'] = -HLoss()(x)
                 i_dict = 0
                 for key in losses_dict.keys():
                     if loss_wgt[key] == 0:
@@ -201,7 +212,7 @@ class MyModel(Module):
                         losses += losses_dict[key] * loss_wgt[key]
                     i_dict += 1
             else:
-                losses = losses_dict['logy_pf'] + losses_dict['wgt2']
+                losses = losses_dict['y_pf'] + losses_dict['wgt2']
         else:
             losses = None
             losses_dict = None
