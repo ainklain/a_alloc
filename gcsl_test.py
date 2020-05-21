@@ -294,7 +294,10 @@ def main():
 
     model = MyModel(sampler.n_features + 2, sampler.n_labels, cost_rate=c.cost_rate)
 
+    dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
 
+    dataset['train'], dataset['eval'], dataset['test'], (
+    dataset['test_insample'], insample_boundary), guide_date = sampler.get_batch(2000)
 
 
 # sampler = Sampler(features, labels, init_train_len=500, label_days=130)
@@ -322,23 +325,39 @@ class Sampler:
         return len(self.add_infos['date']) - 1
 
     def sample_trajectory(self, model, dataset):
+        # dataset = dataset['train']; self = sampler
         traj = list()
+        replay_memory = dict(positive=list(), negative=list())
         features, labels = to_torch(dataset)
         x = torch.cat([features['idx'], features['macro']], dim=-1)
-        pf_r = torch.ones(len(x) // self.label_days + 1)
+        pf_r = torch.ones(len(features['idx']) // self.label_days + 1, 1)
         pf_mdd = torch.zeros_like(pf_r)
         r = 0
         for i, t in enumerate(range(0, len(x)-1, self.label_days)):
-            s0 = torch.cat([x[t], pf_r[i:(i+1)], pf_mdd[i:(i+1)]])
+            s0 = torch.cat([x[t:(t+1)], pf_r[i:(i+1)], pf_mdd[i:(i+1)]], dim=1)
             a = model.policy(s0)
+
+            traj.append([s0, a])
+
             pf_r[i+1] = pf_r[i] * (1. + (a * (torch.exp(labels['logy_for_calc'][t])-1.)).sum())
             pf_mdd[i+1] = pf_r[i+1] / pf_r[:(i+2)].max() - 1.
+
             if pf_mdd[i+1] <= -0.1:
                 r = -1
                 break
 
-            s1 =
-            traj.append([s0, a, ])
+        for k in range(1, len(traj)):
+            for m in range(k):
+                if k == (len(traj)-1) and r == -1:
+                    key = 'negative'
+                else:
+                    key = 'positive'
+                replay_memory[key].append(traj[m] + [traj[k][0], k-m])
+
+
+
+
+
 
     def get_batch(self, i):
         train_data_len = 1000
@@ -416,7 +435,8 @@ class MyModel(Module):
         self.out_layer = XLinear(h_out, out_dim)
 
         # asset allocation
-        self.aa_hidden_layer = XLinear(out_dim * 2, out_dim)
+        self.aa_hidden_layer = XLinear(out_dim * 2 + h_in, (out_dim * 2 + h_in) // 2)
+        self.aa_hidden_layer2 = XLinear((out_dim * 2 + h_in) // 2, out_dim)
         self.aa_out_layer = XLinear(out_dim, out_dim)
 
         self.loss_func_logy = nn.MSELoss()
@@ -473,16 +493,36 @@ class MyModel(Module):
 
         return features_perturbed
 
-    @profile
-    def policy(self, x, features_wgt=None, n_samples=1000):
-        # features, labels=  train_features, train_labels
+    def run(self, features, wgt, n_samples):
+        x = torch.cat([features['idx'], features['macro']], dim=-1)
         pred = self.sample_predict(x, n_samples=n_samples)
         pred_mu = torch.mean(pred, dim=0)
         pred_sigma = torch.std(pred, dim=0)
 
-        # x = torch.cat([pred_mu, pred_sigma, features_wgt], dim=-1)
-        x = torch.cat([pred_mu, pred_sigma], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma, wgt], dim=-1)
         x = self.aa_hidden_layer(x)
+        x = F.relu(x)
+        x = self.aa_out_layer(x)
+        # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
+        # x = F.softmax(x)
+        x = F.sigmoid(x) + 0.001
+        x = x / x.sum(dim=1, keepdim=True)
+
+        return x, pred_mu, pred_sigma
+
+    @profile
+    def policy(self, s, n_samples=1000):
+        # features, labels=  train_features, train_labels
+        # s = s0; self = model; n_samples=10
+        pred = self.sample_predict(s, n_samples=n_samples)
+        pred_mu = torch.mean(pred, dim=0)
+        pred_sigma = torch.std(pred, dim=0)
+
+        # x = torch.cat([pred_mu, pred_sigma, features_wgt], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma, s], dim=-1)
+        x = self.aa_hidden_layer(x)
+        x = F.relu(x)
+        x = self.aa_hidden_layer2(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
         x = torch.sigmoid(x) + 0.001

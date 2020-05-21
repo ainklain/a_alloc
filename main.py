@@ -1,4 +1,4 @@
-
+import re
 import os
 import numpy as np
 import pandas as pd
@@ -88,8 +88,8 @@ class Configs:
         self.es_count = 0
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         # self.adaptive_loss_wgt = {'y_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.0001}
-        self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1,
-                                  'cost': 1., 'entropy': 0.0001}
+        self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
+                                  'cost': 1., 'entropy': 0.001}
 
         return adaptive_flag
 
@@ -426,7 +426,17 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
     for t in iter_:
         # ################ config in loop ################
         outpath_t = os.path.join(c.outpath, str(t))
+        if os.path.isdir(outpath_t):
+            r = re.compile("{}+".format(t))
+            n = len(list(filter(r.match, os.listdir(c.outpath))))
+            outpath_t = outpath_t + "_{}".format(n)
+
         os.makedirs(outpath_t, exist_ok=True)
+
+        str_ = c.export()
+        with open(os.path.join(outpath_t, 'c.txt'), 'w') as f:
+            f.write(str_)
+
         adaptive_flag = c.init_loop()
 
         dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
@@ -615,6 +625,67 @@ def main(testmode=False):
     #               n_samples=n_samples, rebal_freq=rebal_freq, suffix=t, outpath=outpath)
 
 
+
+def test():
+    adaptive_lrx_l = [2, 5, 10]  # learning rate * 배수
+    use_accum_data_l = [True, False]  # [sampler] 데이터 누적할지 말지
+
+    random_guide_weight_l = [0., 0.2, 0.5, 0.8, 1.]
+    adaptive_loss_wgt_l = [
+        {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.0001}]
+    # adaptive_loss_wgt_l = [{'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.0001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.01}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.1}
+    #
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.5, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 1, 'cost': 1., 'entropy': 0.001}
+    #
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 100., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 10., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
+    #
+    #                      , {'y_pf': 0., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
+    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
+    #                      , {'y_pf': 0.5, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
+    #                      , {'y_pf': 1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
+    #                      ]
+    for adaptive_lrx in adaptive_lrx_l:
+        for use_accum_data in use_accum_data_l:
+            for random_guide_weight in random_guide_weight_l:
+                for adaptive_loss_wgt in adaptive_loss_wgt_l:
+                    for t in [2600, 3000, 3400]:
+                        name = 'app_adv_3'
+                        c = Configs(name)
+
+                        str_ = c.export()
+                        with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
+                            f.write(str_)
+
+                        c.adaptive_lrx = adaptive_lrx
+                        c.use_accum_data = use_accum_data
+                        c.random_guide_weight = random_guide_weight
+                        c.adaptive_loss_wgt = adaptive_loss_wgt
+
+                        # data processing
+                        features_dict, labels_dict, add_info = get_data(configs=c)
+                        sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
+
+                        # model & optimizer
+                        model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
+                        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
+                        load_model(c.outpath, model, optimizer)
+                        model.train()
+                        model.to(tu.device)
+
+                        train(c, model, optimizer, sampler, t)
 
 # if __name__ == '__main__':
 #     main()
