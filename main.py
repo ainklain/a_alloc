@@ -65,8 +65,8 @@ class Configs:
     def init_weight(self):
         if self.datatype == 'app':
             self.cash_idx = 3
-            # self.base_weight = [0.7, 0.2, 0.1, 0.0]
-            self.base_weight = [0.4, 0.3, 0.3, 0.0]
+            self.base_weight = [0.7, 0.2, 0.1, 0.0]
+            # self.base_weight = [0.4, 0.3, 0.3, 0.0]
             # self.base_weight = None
         else:
             self.cash_idx = 0
@@ -659,10 +659,10 @@ def test():
     #                      ]
     for adaptive_lrx in adaptive_lrx_l:
         for use_accum_data in use_accum_data_l:
-            for random_guide_weight in random_guide_weight_l:
-                for adaptive_loss_wgt in adaptive_loss_wgt_l:
-                    for t in [2600, 3000, 3400]:
-                        name = 'app_adv_3'
+            for t in [3600, 3000, 1500, ]:
+                for random_guide_weight in random_guide_weight_l:
+                    for adaptive_loss_wgt in adaptive_loss_wgt_l:
+                        name = 'app_adv_5'
                         c = Configs(name)
 
                         str_ = c.export()

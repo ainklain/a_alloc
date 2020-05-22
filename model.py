@@ -68,7 +68,8 @@ class MyModel(Module):
         self.out_layer = XLinear(h_out, out_dim)
 
         # asset allocation
-        self.aa_hidden_layer = XLinear(out_dim * 3, out_dim)
+        self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim)//2)
+        self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim)
         self.aa_out_layer = XLinear(out_dim, out_dim)
 
         self.loss_func_logy = nn.MSELoss()
@@ -132,8 +133,10 @@ class MyModel(Module):
         pred_mu = torch.mean(pred, dim=0)
         pred_sigma = torch.std(pred, dim=0)
 
-        x = torch.cat([pred_mu, pred_sigma, wgt], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma, wgt, x], dim=-1)
         x = self.aa_hidden_layer(x)
+        x = F.relu(x)
+        x = self.aa_hidden_layer2(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
         # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
@@ -176,8 +179,13 @@ class MyModel(Module):
 
             return False
 
+        # guide_wgt = self.guide_weight.repeat(len(x), 1)
+        # if is_train and self.random_guide_weight > 0:
+        #     replace_idx = np.random.choice(np.arange(len(x)), int(len(x) * self.random_guide_weight), replace=False)
+        #     guide_wgt[replace_idx] = torch.rand(len(replace_idx), guide_wgt.shape[1])
+        # guide_wgt = guide_wgt.to(x.device)
+
         if is_train:
-            # guide_wgt = torch.FloatTensor([[0.699, 0.2, 0.1, 0.001]]).repeat(len(x), 1).to(x.device)
             if np.random.rand() > self.random_guide_weight:
                 guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
             else:
@@ -191,8 +199,8 @@ class MyModel(Module):
             losses_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
             losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()
-            # losses_dict['mdd_pf'] = F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
-            losses_dict['mdd_pf'] = torch.relu(-(x * next_y).sum(dim=1) - 0.05).sum()
+            losses_dict['mdd_pf'] = F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
+            # losses_dict['mdd_pf'] = torch.relu(-(x * next_y).sum(dim=1) - 0.05).sum()
             losses_dict['logy'] = self.loss_func_logy(pred_mu, labels['logy'])
             losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
             losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])

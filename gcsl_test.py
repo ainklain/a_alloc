@@ -1,7 +1,11 @@
+# https://github.com/hijkzzz/reinforcement-learning.pytorch/blob/master/src/sac.py
 
+import random
+import copy
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from collections import deque
 import os
 import numpy as np
 import torch
@@ -26,12 +30,12 @@ except AttributeError:
 class Configs:
     def __init__(self, name):
         self.name = name
-        self.lr = 5e-4
+        self.lr = 5e-3
         self.num_epochs = 30000
         self.base_i0 = 1000
         self.n_samples = 200
-        self.k_days = 20
-        self.label_days = 20
+        self.k_days = 5
+        self.label_days = 5
         self.strategy_days = 250
         self.adaptive_count = 5
         self.adaptive_lrx = 10 # learning rate * 배수
@@ -281,7 +285,7 @@ def to_torch(dataset):
 
 def main():
 
-    name = 'apptest_adv_15'
+    name = 'gcsl_test_03'
     c = Configs(name)
 
     str_ = c.export()
@@ -292,16 +296,116 @@ def main():
     features_dict, labels_dict, add_info = get_data(configs=c)
     sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
 
-    model = MyModel(sampler.n_features + 2, sampler.n_labels, cost_rate=c.cost_rate)
+    model = MyModel(sampler.n_features + 4, sampler.n_labels, cost_rate=c.cost_rate) # 4: nav, mdd, g, h
+    optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
 
-    dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
+    memory = Memory(1e5)
 
-    dataset['train'], dataset['eval'], dataset['test'], (
-    dataset['test_insample'], insample_boundary), guide_date = sampler.get_batch(2000)
+    t = 3000
+    outpath_t = os.path.join(c.outpath, str(t))
+    os.makedirs(outpath_t, exist_ok=True)
+    # initial data collecting
+    for _ in range(1000):
+        goal = 0.03 + np.random.rand() * 0.07   # 0.03~0.1
+        idx = np.random.choice(np.arange(500, t))
+        mem_per_traj, _ = sampler.sample_trajectory(goal, model, sampler.sample_env(idx, data_len=2500))
+        memory.add(mem_per_traj)
+
+    model.train()
+    batch_size = 256
+
+    for ep in range(1000):
+        if ep % 10 == 0:
+            # plot
+            _, [traj, pf_r, pf_mdd] = sampler.sample_trajectory(0.07, model, sampler.sample_env(t, data_len=2500))
+            a_df = pd.DataFrame(columns=[0, 1, 2, 3])
+            for i_tr, tr in enumerate(traj):
+                a_df.loc[i_tr] = list(tu.np_ify(tr[1]).squeeze())
+
+            data_for_plot = pd.DataFrame({'r': tu.np_ify(pf_r.squeeze())[:len(traj)], 'mdd': 1 + tu.np_ify(pf_mdd.squeeze())[:len(traj)]}, index=np.arange(len(pf_r))[:len(traj)])
+            fig, axes = plt.subplots(nrows=2, ncols=1)
+            # ax1 = fig.add_subplot(211)
+            axes[0].plot(data_for_plot)
+            a_df.plot.area(ax=axes[1])
+            fig.savefig(os.path.join(outpath_t, 'test_{}.png'.format(ep)))
+            plt.close(fig)
+
+        # new trj.
+        goal = 0.03 + np.random.rand() * 0.07   # 0.03~0.1
+        idx = np.random.choice(np.arange(500, t))
+        mem_per_traj, _ = sampler.sample_trajectory(goal, model, sampler.sample_env(idx, data_len=2500))
+        memory.add(mem_per_traj)
 
 
-# sampler = Sampler(features, labels, init_train_len=500, label_days=130)
+        ep_losses = 0
+        n_batch_cycle = memory.reset_epoch(batch_size)
+        for _ in range(n_batch_cycle):
+            data = memory.sample_batch(batch_size, epoch=True)
+            pred_a = model.policy(data['s0'], data['sh'], data['h'])
+            label_a = data['a']
+            loss = (nn.MSELoss(reduction='none')(pred_a, label_a) * data['sign']).sum()
+            # loss = (nn.KLDivLoss(reduction='none')(torch.log(pred_a), label_a) * data['sign']).sum()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            ep_losses += tu.np_ify(loss)
+
+        print(ep, ep_losses)
+
+
+class Memory(object):
+    def __init__(self, memory_size):
+        self.memory_size = memory_size
+        self.memory_counter = 0
+        self.memory = list()
+
+    def add(self, memory_per_traj):
+        self.memory += memory_per_traj
+
+        excess = int(len(self.memory) - self.memory_size)
+        if excess > 0:
+            self.memory = self.memory[excess:]
+
+        self.memory_counter = len(self.memory)
+
+    def clear(self):
+        self.memory = list()
+        self.memory_counter = 0
+
+    def sample_batch(self, batch_size, epoch=True):
+        if self.memory_counter < batch_size:
+            # print('insufficient memory')
+            sampled_memory = random.sample(self.memory, self.memory_counter)
+            # return False
+        else:
+            if epoch is True:
+                if len(self.epoch_remain_idx) < batch_size:
+                    sampled_memory = [self.memory[i] for i in self.epoch_remain_idx]
+                else:
+                    sampled_idx = self.epoch_remain_idx[:batch_size]
+                    self.epoch_remain_idx = self.epoch_remain_idx[batch_size:]
+                    sampled_memory = [self.memory[i] for i in sampled_idx]
+            else:
+                sampled_memory = random.sample(self.memory, batch_size)
+
+        sampled_batch = dict(s0=list(), a=list(), sh=list(), h=list(), sign=list())
+        for key in sampled_batch.keys():
+            for i in range(len(sampled_memory)):
+                sampled_batch[key].append(sampled_memory[i][key])
+            sampled_batch[key] = torch.cat(sampled_batch[key], dim=0)
+
+        return sampled_batch
+
+    def reset_epoch(self, batch_size):
+        self.epoch_remain_idx = np.arange(len(self.memory))
+        np.random.shuffle(self.epoch_remain_idx)
+        self.epoch_remain_idx = list(self.epoch_remain_idx)
+        return int(np.ceil(len(self.epoch_remain_idx) / batch_size))
+
+
+    # sampler = Sampler(features, labels, init_train_len=500, label_days=130)
 # train_dataset, eval_dataset, test_dataset = sampler.get_batch(1000)
+
 class Sampler:
     def __init__(self, features, labels, add_infos, configs):
         c = configs
@@ -324,40 +428,69 @@ class Sampler:
     def max_len(self):
         return len(self.add_infos['date']) - 1
 
-    def sample_trajectory(self, model, dataset):
-        # dataset = dataset['train']; self = sampler
+    def sample_trajectory(self, goal, model, dataset):
+        # dataset =  sampler.sample_env(idx); self = sampler
+        npoint_per_year = 250 // self.label_days
+
         traj = list()
-        replay_memory = dict(positive=list(), negative=list())
+        memory_per_traj = list()
         features, labels = to_torch(dataset)
         x = torch.cat([features['idx'], features['macro']], dim=-1)
+        max_h = len(x) // self.label_days
+
         pf_r = torch.ones(len(features['idx']) // self.label_days + 1, 1)
         pf_mdd = torch.zeros_like(pf_r)
         r = 0
+        h = max_h / 100
         for i, t in enumerate(range(0, len(x)-1, self.label_days)):
-            s0 = torch.cat([x[t:(t+1)], pf_r[i:(i+1)], pf_mdd[i:(i+1)]], dim=1)
-            a = model.policy(s0)
+            with torch.set_grad_enabled(False):
+                s0 = torch.cat([x[t:(t+1)], pf_r[i:(i+1)], pf_mdd[i:(i+1)]], dim=1)
+                a = model.policy(s0, goal, h)
+                h -= 1 / 100
+                traj.append([s0, a])
 
-            traj.append([s0, a])
+                pf_r[i+1] = pf_r[i] * (1. + (a * (torch.exp(labels['logy_for_calc'][t])-1.)).sum())
+                pf_mdd[i+1] = pf_r[i+1] / pf_r[:(i+2)].max() - 1.
 
-            pf_r[i+1] = pf_r[i] * (1. + (a * (torch.exp(labels['logy_for_calc'][t])-1.)).sum())
-            pf_mdd[i+1] = pf_r[i+1] / pf_r[:(i+2)].max() - 1.
-
-            if pf_mdd[i+1] <= -0.1:
+            if pf_mdd[i+1] <= -0.03:
                 r = -1
                 break
 
+            if i % npoint_per_year == 0 and pf_r[-1] < (1 + goal) ** (i//npoint_per_year):
+                r = -1
+                break
+
+        if r == 0 and pf_r[-1] < (1+goal) ** (i/npoint_per_year):
+            r = -1
+        else:
+            r = 1
+
         for k in range(1, len(traj)):
+            if k == (len(traj)-1) and r == -1:
+            # if r == -1:
+                sign_ = -1
+            else:
+                sign_ = 1
             for m in range(k):
-                if k == (len(traj)-1) and r == -1:
-                    key = 'negative'
-                else:
-                    key = 'positive'
-                replay_memory[key].append(traj[m] + [traj[k][0], k-m])
+                memory_per_traj.append({'s0': traj[m][0],
+                                        'a':  traj[m][1],
+                                        'sh': pf_r[k:(k+1)],
+                                        'h': torch.tensor([[(k-m) / 100]], dtype=torch.float32),
+                                        'sign': torch.tensor([[sign_]], dtype=torch.float32)})
 
+        return memory_per_traj, [traj, pf_r, pf_mdd]
 
+    def sample_env(self, i, data_len=250):
+        assert i >= self.init_train_len
 
+        start_i = i - data_len
+        end_i = i
+        idx = np.arange(start_i, end_i)
+        features_train = dict([(key, self.features[key][idx]) for key in self.features.keys()])
+        labels_train = dict([(key, self.labels[key][idx]) for key in self.labels.keys()])
+        dataset = (features_train, labels_train)
 
-
+        return dataset
 
     def get_batch(self, i):
         train_data_len = 1000
@@ -432,12 +565,8 @@ class MyModel(Module):
             self.hidden_layers.append(XLinear(h_in, h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_out, out_dim)
-
-        # asset allocation
-        self.aa_hidden_layer = XLinear(out_dim * 2 + h_in, (out_dim * 2 + h_in) // 2)
-        self.aa_hidden_layer2 = XLinear((out_dim * 2 + h_in) // 2, out_dim)
-        self.aa_out_layer = XLinear(out_dim, out_dim)
+        self.mu_out_layer = XLinear(h_out, out_dim)
+        self.logscale_out_layer = XLinear(h_out, out_dim)
 
         self.loss_func_logy = nn.MSELoss()
 
@@ -454,21 +583,15 @@ class MyModel(Module):
             x = F.leaky_relu(x)
             x = F.dropout(x, p=self.dropout_r, training=mask)
 
-        x = self.out_layer(x)
+        mu = torch.sigmoid(self.mu_out_layer(x))
+        logscale = self.logscale_out_layer(x)
+        logscale = torch.clamp(logscale, -20, 2)
+        scale = logscale.exp()
+
+        self.policy_dist = torch.distributions.Normal(mu, torch.exp(scale))
+        self.entropy = self.policy_dist.entropy()
+
         return x
-
-    def sample_predict(self, x, n_samples):
-        self.train()
-        # Just copies type from x, initializes new vector
-        # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
-        #
-        # for i in range(n_samples):
-        #     y = self.forward(x, sample=True)
-        #     predictions[i] = y
-
-        predictions = x.unsqueeze(0).repeat(n_samples, 1, 1)
-        predictions = self.forward(predictions, sample=True)
-        return predictions
 
     def adversarial_noise(self, features, labels):
         for key in features.keys():
@@ -493,40 +616,18 @@ class MyModel(Module):
 
         return features_perturbed
 
-    def run(self, features, wgt, n_samples):
-        x = torch.cat([features['idx'], features['macro']], dim=-1)
-        pred = self.sample_predict(x, n_samples=n_samples)
-        pred_mu = torch.mean(pred, dim=0)
-        pred_sigma = torch.std(pred, dim=0)
-
-        x = torch.cat([pred_mu, pred_sigma, wgt], dim=-1)
-        x = self.aa_hidden_layer(x)
-        x = F.relu(x)
-        x = self.aa_out_layer(x)
-        # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
-        # x = F.softmax(x)
-        x = F.sigmoid(x) + 0.001
-        x = x / x.sum(dim=1, keepdim=True)
-
-        return x, pred_mu, pred_sigma
-
     @profile
-    def policy(self, s, n_samples=1000):
+    def policy(self, s, g, h):
         # features, labels=  train_features, train_labels
         # s = s0; self = model; n_samples=10
-        pred = self.sample_predict(s, n_samples=n_samples)
-        pred_mu = torch.mean(pred, dim=0)
-        pred_sigma = torch.std(pred, dim=0)
+        if type(g) in [int, float]:
+            g = torch.tensor([[g]], dtype=torch.float32).to(s.device)
 
-        # x = torch.cat([pred_mu, pred_sigma, features_wgt], dim=-1)
-        x = torch.cat([pred_mu, pred_sigma, s], dim=-1)
-        x = self.aa_hidden_layer(x)
-        x = F.relu(x)
-        x = self.aa_hidden_layer2(x)
-        x = F.relu(x)
-        x = self.aa_out_layer(x)
-        x = torch.sigmoid(x) + 0.001
-        x = x / x.sum(dim=1, keepdim=True)
+        if type(h) in [int, float]:
+            h = torch.tensor([[h]], dtype=torch.float32).to(s.device)
+
+        x = torch.cat([s, g, h], dim=-1)
+        x = self.forward(x)
 
         return x
 
