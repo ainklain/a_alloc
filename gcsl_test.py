@@ -283,9 +283,15 @@ def to_torch(dataset):
     return [features_dict, labels_dict]
 
 
+def normalize_action(action):
+    action = torch.sigmoid(action) + 1e-3
+    action = action / action.sum(dim=1, keepdim=True)
+    return action
+
+
 def main():
 
-    name = 'gcsl_test_03'
+    name = 'gcsl_test_05'
     c = Configs(name)
 
     str_ = c.export()
@@ -301,7 +307,7 @@ def main():
 
     memory = Memory(1e5)
 
-    t = 3000
+    t = 3001
     outpath_t = os.path.join(c.outpath, str(t))
     os.makedirs(outpath_t, exist_ok=True)
     # initial data collecting
@@ -341,10 +347,14 @@ def main():
         n_batch_cycle = memory.reset_epoch(batch_size)
         for _ in range(n_batch_cycle):
             data = memory.sample_batch(batch_size, epoch=True)
-            pred_a = model.policy(data['s0'], data['sh'], data['h'])
+            # pred_a = model.policy(data['s0'], data['sh'], data['h'])
+            policy_dist, mu, scale = model.policy(data['s0'], data['sh'], data['h'])
+            pred_a = normalize_action(policy_dist.rsample())
             label_a = data['a']
-            loss = (nn.MSELoss(reduction='none')(pred_a, label_a) * data['sign']).sum()
-            # loss = (nn.KLDivLoss(reduction='none')(torch.log(pred_a), label_a) * data['sign']).sum()
+            entropy = policy_dist.entropy()
+            # loss = entropy.sum()
+            # loss = (nn.MSELoss(reduction='none')(pred_a, label_a) * data['sign']).sum() - entropy.sum()
+            loss = (nn.KLDivLoss(reduction='none')(torch.log(pred_a), label_a) * data['sign']).sum()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -445,7 +455,8 @@ class Sampler:
         for i, t in enumerate(range(0, len(x)-1, self.label_days)):
             with torch.set_grad_enabled(False):
                 s0 = torch.cat([x[t:(t+1)], pf_r[i:(i+1)], pf_mdd[i:(i+1)]], dim=1)
-                a = model.policy(s0, goal, h)
+                policy, mu, scale = model.policy(s0, goal, h)
+                a = normalize_action(mu)
                 h -= 1 / 100
                 traj.append([s0, a])
 
@@ -584,14 +595,15 @@ class MyModel(Module):
             x = F.dropout(x, p=self.dropout_r, training=mask)
 
         mu = torch.sigmoid(self.mu_out_layer(x))
-        logscale = self.logscale_out_layer(x)
-        logscale = torch.clamp(logscale, -20, 2)
-        scale = logscale.exp()
+        scale = self.logscale_out_layer(x)
+        scale = torch.clamp(scale, 0.01, 0.5)
+        # logscale = self.logscale_out_layer(x)
+        # logscale = torch.clamp(logscale, -20., 2.)
+        # scale = logscale.exp()
 
-        self.policy_dist = torch.distributions.Normal(mu, torch.exp(scale))
-        self.entropy = self.policy_dist.entropy()
-
-        return x
+        policy_dist = torch.distributions.Normal(mu, torch.exp(scale))
+        # entropy = policy_dist.entropy()
+        return policy_dist, mu, scale
 
     def adversarial_noise(self, features, labels):
         for key in features.keys():

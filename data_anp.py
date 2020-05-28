@@ -118,7 +118,7 @@ def get_data(configs):
     # parameters
     c = configs
 
-    calc_days = [20, 60, 120, 250]  # list of return calculation days
+    calc_days = [20,]  # list of return calculation days
     # normalizing_window = 500  # macro normalizing window size
     # label_days = 60
     # k_days = 20
@@ -221,10 +221,11 @@ class Sampler:
 
         self.train_data_len = c.train_data_len
         self.label_days = c.label_days
+        self.sampling_freq = c.sampling_freq
         self.test_days = c.test_days
         self.use_accum_data = c.use_accum_data
 
-        self.n_features = len(add_infos['macro_list']) + len(add_infos['idx_list']) * len(add_infos['calc_days'])
+        self.n_features = len(add_infos['macro_list']) + len(add_infos['idx_list']) * len(add_infos['calc_days']) + 1
         self.n_labels = len(add_infos['idx_list'])
 
     @property
@@ -233,7 +234,7 @@ class Sampler:
 
     @property
     def max_len(self):
-        return len(self.add_infos['date'])- 1
+        return len(self.add_infos['date']) - 1
 
     def get_batch(self, i):
         assert i >= self.init_train_len
@@ -283,48 +284,47 @@ class Sampler:
         guide_date = [self.date_[train_start_i], self.date_[eval_start_i], self.date_[test_start_i], self.date_[test_end_i]]
         return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
 
-
-    def get_batch_set(self, i):
+    def get_batch_set(self, i, is_train=True):
         assert i >= self.init_train_len
 
-        start_i = self.add_infos['min_begin_i']
+        batch_set = []
+
+        context_len = 24
+
+        start_i = max(self.add_infos['min_begin_i'],  context_len * self.sampling_freq)
         end_i = i - self.label_days
+
         total_idx = np.arange(start_i + 1, end_i)
 
         test_start_i = i
         test_end_i = min(i + self.test_days, self.max_len)
 
+        t_idx = ((np.arange(context_len + 1) - context_len) / 10).reshape([-1, 1])
+        for t in total_idx:
+            selected_i = np.arange(t - context_len*self.sampling_freq, t+1, self.sampling_freq)
+            shuffled_i = np.arange(len(selected_i[:-1])).ravel()
+            np.random.shuffle(shuffled_i)
 
+            context_i = shuffled_i[:int(len(shuffled_i) * 0.7)]
+            target_i = np.append(shuffled_i, len(shuffled_i))
+            if not is_train:
+                target_i = np.sort(target_i)
 
-        train_idx = total_idx[total_idx % 250 <= 200]
-        train_idx = np.random.choice(train_idx, len(train_idx), replace=False)
-        features_train_prev = dict([(key, self.features[key][train_idx-1]) for key in self.features.keys()])
-        features_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
-        labels_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
-        train_dataset = (features_train_prev, features_train, labels_train)
-        # train_dataset = (self.features[train_idx], self.labels[train_idx], self.sr_labels[train_idx])
-        eval_idx = np.random.choice(np.arange(eval_start_i + 1, eval_end_i), eval_end_i-eval_start_i-1, replace=False)
-        features_eval_prev = dict([(key, self.features[key][eval_idx-1]) for key in self.features.keys()])
-        features_eval = dict([(key, self.features[key][eval_idx]) for key in self.features.keys()])
-        labels_eval = dict([(key, self.labels[key][eval_idx]) for key in self.labels.keys()])
-        eval_dataset = (features_eval_prev, features_eval, labels_eval)
-        # eval_dataset = (self.features[eval_idx], self.labels[eval_idx], self.sr_labels[eval_idx])
-        # test_idx = np.random.choice(np.arange(test_start_i, test_end_i), test_end_i-test_start_i, replace=False)
-        test_idx = np.arange(test_start_i + 1, test_end_i)
-        features_test_prev = dict([(key, self.features[key][test_idx-1]) for key in self.features.keys()])
-        features_test = dict([(key, self.features[key][test_idx]) for key in self.features.keys()])
-        labels_test = dict([(key, self.labels[key][test_idx]) for key in self.labels.keys()])
-        test_dataset = (features_test_prev, features_test, labels_test)
-        # test_dataset = (self.features[test_idx], self.labels[test_idx], self.sr_labels[test_idx])
+            context_x = np.concatenate([self.features['macro'][selected_i[context_i]],
+                                        self.features['idx'][selected_i[context_i]],
+                                        t_idx[context_i]], axis=1)
 
-        test_insample_idx = np.arange(train_start_i + 1, test_end_i)
-        features_test_insample_prev = dict([(key, self.features[key][test_insample_idx-1]) for key in self.features.keys()])
-        features_test_insample = dict([(key, self.features[key][test_insample_idx]) for key in self.features.keys()])
-        labels_test_insample = dict([(key, self.labels[key][test_insample_idx]) for key in self.labels.keys()])
-        test_dataset_insample = (features_test_insample_prev, features_test_insample, labels_test_insample)
-        insample_boundary = np.concatenate([np.where(test_insample_idx == eval_start_i)[0], np.where(test_insample_idx == test_start_i)[0]])
-        guide_date = [self.date_[train_start_i], self.date_[eval_start_i], self.date_[test_start_i], self.date_[test_end_i]]
-        return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
+            context_y = self.labels['logy_for_calc'][selected_i[context_i]]
+
+            target_x = np.concatenate([self.features['macro'][selected_i[target_i]],
+                                       self.features['idx'][selected_i[target_i]],
+                                       t_idx[target_i]], axis=1)
+            target_y = self.labels['logy_for_calc'][target_i]
+            batch_set.append([context_x, context_y, target_x, target_y])
+            # batch_set.append([torch.from_numpy(context_x).float().to(tu.device), torch.from_numpy(context_y).float().to(tu.device),
+            #                   torch.from_numpy(target_x).float().to(tu.device), torch.from_numpy(target_y).float().to(tu.device)])
+
+        return batch_set
 
 
 

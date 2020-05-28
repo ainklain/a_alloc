@@ -1,3 +1,4 @@
+import random
 import re
 import os
 import numpy as np
@@ -28,6 +29,7 @@ class Configs:
         self.num_epochs = 30000
         self.base_i0 = 2000
         self.n_samples = 200
+        self.sampling_freq = 20
         self.k_days = 20
         self.label_days = 60
         self.strategy_days = 250
@@ -41,6 +43,7 @@ class Configs:
         self.normalizing_window = 500  # norm windows for macro data
         self.use_accum_data = False # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
+        self.adv_train = True
         self.n_pretrain = 20
 
         self.datatype = 'app'
@@ -51,7 +54,7 @@ class Configs:
         self.model_init_everytime = True
 
         self.hidden_dim = [72, 48, 32]
-        self.dropout_r = 0.5
+        self.dropout_r = 0.3
 
         self.random_guide_weight = 0.0
 
@@ -253,7 +256,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     # l_label_base, = plt.plot(x, y_label - y_base)
     # l_label_guide, = plt.plot(x, y_label - y_guide)
 
-    plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+    plt.legend(handles=(l_port_guide), labels=('port-guide'))
+    # plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
 
     # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
     if insample_boundary is not None:
@@ -413,7 +417,7 @@ def backtest(configs, sampler):
     plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath)
 
 
-def train(configs, model, optimizer, sampler, t=None, adv_train=False):
+def train(configs, model, optimizer, sampler, t=None):
     c = configs
 
     if t is None:
@@ -468,7 +472,7 @@ def train(configs, model, optimizer, sampler, t=None, adv_train=False):
 
         for ep in range(c.num_epochs):
             train_features_prev, train_features, train_labels = dataset['train']
-            if adv_train is True:
+            if c.adv_train is True:
                 train_features = model.adversarial_noise(train_features, train_labels)
 
             _, losses_train, _, _, _ = model.forward_with_loss(train_features, train_labels
@@ -624,6 +628,141 @@ def main(testmode=False):
     #     plot_each(0, model, test_features_insample, test_labels_insample, insample_boundary=insample_boundary,
     #               n_samples=n_samples, rebal_freq=rebal_freq, suffix=t, outpath=outpath)
 
+
+def train_anp(dataset, model, optimizer, is_train):
+
+    if is_train:
+        iter_ = 100
+        model.train()
+    else:
+        iter_ = 1
+        model.eval()
+
+    losses = 0
+    for it in range(iter_):
+        batch_dataset = random.sample(dataset, 64)  # batch_size
+        c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(64)])
+        c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(64)])
+        t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(64)])
+        t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(64)])
+
+        c_x = torch.from_numpy(c_x).float().to(tu.device)
+        c_y = torch.from_numpy(c_y).float().to(tu.device)
+        t_x = torch.from_numpy(t_x).float().to(tu.device)
+        t_y = torch.from_numpy(t_y).float().to(tu.device)
+
+        query = (c_x, c_y), t_x
+        target_y = t_y
+
+        with torch.set_grad_enabled(is_train):
+            mu, sigma, log_p, global_kl, local_kl, loss = model(query, target_y)
+
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        losses += tu.np_ify(loss)
+
+    losses = losses / iter_
+    return losses
+
+
+# @profile
+def plot_functions(path, ep, target_x, target_y, context_x, context_y, pred_y, std):
+    """Plots the predicted mean and variance and the context points.
+
+    Args:
+        target_x: An array of shape [B,num_targets,1] that contains the
+            x values of the target points.
+        target_y: An array of shape [B,num_targets,1] that contains the
+            y values of the target points.
+        context_x: An array of shape [B,num_contexts,1] that contains
+            the x values of the context points.
+        context_y: An array of shape [B,num_contexts,1] that contains
+            the y values of the context points.
+        pred_y: An array of shape [B,num_targets,1] that contains the
+            predicted means of the y values at the target points in target_x.
+        std: An array of shape [B,num_targets,1] that contains the
+            predicted std dev of the y values at the target points in target_x.
+    """
+    fig = plt.figure()
+    # Plot everything
+    plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
+    plt.plot(target_x[0], target_y[0], 'k:', linewidth=2)
+    plt.plot(context_x[0], context_y[0], 'ko', markersize=5)
+    plt.fill_between(
+        target_x[0, :, 0],
+        pred_y[0, :, 0] - std[0, :, 0],
+        pred_y[0, :, 0] + std[0, :, 0],
+        alpha=0.2,
+        facecolor='#65c9f7',
+        interpolate=True)
+
+    # Make the plot pretty
+    # plt.yticks([-2, 0, 2], fontsize=16)
+    # plt.xticks([-2, 0, 2], fontsize=16)
+    # plt.ylim([-2, 2])
+    plt.grid('off')
+    ax = plt.gca()
+    file_path = os.path.join(path, 'test_{}.png'.format(ep))
+    if not os.path.exists(file_path):
+        fig.savefig(os.path.join(path, 'test_{}.png'.format(ep)))
+    else:
+        fig.savefig(os.path.join(path, 'test_{}_1.png'.format(ep)))
+    plt.close(fig)
+
+
+
+def main_anp():
+    from model_anp import LatentModel
+    from data_anp import get_data as get_data_anp, Sampler as Sampler_anp
+    # name = 'apptest_adv_28'
+    name = 'anp_1'
+    c = Configs(name)
+
+    str_ = c.export()
+    with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
+        f.write(str_)
+
+    # data processing
+    features_dict, labels_dict, add_infos = get_data_anp(configs=c)
+    sampler = Sampler_anp(features_dict, labels_dict, add_infos, configs=c)
+
+    # model & optimizer
+    model = LatentModel(32, sampler.n_features, sampler.n_labels)
+    optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
+    load_model(c.outpath, model, optimizer)
+    model.train()
+    model.to(tu.device)
+
+    min_eval_loss = 99999
+    earlystop_count = 0
+    ep = 0
+    base_i = 2500
+    dataset = sampler.get_batch_set(base_i)
+    while ep < c.num_epochs:
+        eval_loss = train_anp(dataset, model, optimizer, is_train=False)
+        if ep > 10 and min_eval_loss > eval_loss:
+            model.save_to_optim()
+            min_eval_loss = eval_loss
+            earlystop_count = 0
+        else:
+            earlystop_count += 1
+
+        print("[base_i: {}, ep: {}] eval_loss: {} / count: {}".format(base_i, ep, eval_loss, earlystop_count))
+        # if earlystop_count >= 20:
+        #     model.load_from_optim()
+        #     plot(base_i, base_i, configs.out_path, dataset, model)
+        #
+        #     min_eval_loss = 99999
+        #     earlystop_count = 0
+        #     break
+        # if ep % 5:
+        #     plot(base_i - pred_point, base_i, configs.out_path, dataset, model)
+
+        train_loss = train_anp(dataset, model, optimizer, is_train=True)
+        ep += 1
 
 
 def test():
