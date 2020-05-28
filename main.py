@@ -669,7 +669,7 @@ def train_anp(dataset, model, optimizer, is_train):
 
 
 # @profile
-def plot_functions(path, ep, target_x, target_y, context_x, context_y, pred_y, std):
+def plot_functions(path, ep, sampler, model, pred_y, std):
     """Plots the predicted mean and variance and the context points.
 
     Args:
@@ -686,10 +686,32 @@ def plot_functions(path, ep, target_x, target_y, context_x, context_y, pred_y, s
         std: An array of shape [B,num_targets,1] that contains the
             predicted std dev of the y values at the target points in target_x.
     """
+    dataset = sampler.get_batch_set(2500, is_train=False)
+    batch_dataset = dataset[-64:]
+    c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(64)])
+    c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(64)])
+    t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(64)])
+    t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(64)])
+
+    c_x = torch.from_numpy(c_x).float().to(tu.device)
+    c_y = torch.from_numpy(c_y).float().to(tu.device)
+    t_x = torch.from_numpy(t_x).float().to(tu.device)
+    t_y = torch.from_numpy(t_y).float().to(tu.device)
+
+    query = (c_x, c_y), t_x
+    target_y = t_y
+
+    with torch.set_grad_enabled(False):
+        mu, sigma, log_p, global_kl, local_kl, loss = model(query, target_y)
+
+    t = t_x[0, :, -1]
+    t = np.arange(64)
+
+
     fig = plt.figure()
     # Plot everything
-    plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
-    plt.plot(target_x[0], target_y[0], 'k:', linewidth=2)
+    plt.plot(t, pred_y[0], 'b', linewidth=2)
+    plt.plot(t, target_y[0], 'k:', linewidth=2)
     plt.plot(context_x[0], context_y[0], 'ko', markersize=5)
     plt.fill_between(
         target_x[0, :, 0],
@@ -711,7 +733,6 @@ def plot_functions(path, ep, target_x, target_y, context_x, context_y, pred_y, s
     else:
         fig.savefig(os.path.join(path, 'test_{}_1.png'.format(ep)))
     plt.close(fig)
-
 
 
 def main_anp():
