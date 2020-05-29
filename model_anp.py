@@ -337,7 +337,7 @@ class Decoder(nn.Module):
         mu, log_sigma = torch.chunk(y_pred, 2, dim=-1)
 
         # Bound the variance
-        sigma = 0.1 + 0.9 * F.softplus(log_sigma)
+        sigma = 0.05 + 0.95 * F.softplus(log_sigma)
 
         dist = torch.distributions.Normal(loc=mu, scale=sigma)
 
@@ -378,7 +378,6 @@ class LatentModel(nn.Module):
             global_prior = torch.distributions.Normal(loc=prior_g_mu, scale=prior_g_sigma)
             global_kl = torch.distributions.kl_divergence(global_posterior, global_prior).sum(dim=-1, keepdims=True)
             global_kl = global_kl.repeat([1, num_targets])
-
 
             # local
             posterior_l_mu = posterior_l_mu.mean(dim=1, keepdims=True).repeat([1, n_context, 1])

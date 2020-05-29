@@ -669,7 +669,7 @@ def train_anp(dataset, model, optimizer, is_train):
 
 
 # @profile
-def plot_functions(path, ep, sampler, model, pred_y, std):
+def plot_functions(path, ep, base_i, sampler, model):
     """Plots the predicted mean and variance and the context points.
 
     Args:
@@ -686,12 +686,14 @@ def plot_functions(path, ep, sampler, model, pred_y, std):
         std: An array of shape [B,num_targets,1] that contains the
             predicted std dev of the y values at the target points in target_x.
     """
-    dataset = sampler.get_batch_set(2500, is_train=False)
-    batch_dataset = dataset[-64:]
-    c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(64)])
-    c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(64)])
-    t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(64)])
-    t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(64)])
+
+    dataset = sampler.get_batch_set(base_i, is_train=False)
+    batch_dataset = dataset[::-20]
+    batch_dataset.reverse()
+    c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(len(batch_dataset))])
+    c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(len(batch_dataset))])
+    t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(len(batch_dataset))])
+    t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(len(batch_dataset))])
 
     c_x = torch.from_numpy(c_x).float().to(tu.device)
     c_y = torch.from_numpy(c_y).float().to(tu.device)
@@ -702,36 +704,63 @@ def plot_functions(path, ep, sampler, model, pred_y, std):
     target_y = t_y
 
     with torch.set_grad_enabled(False):
-        mu, sigma, log_p, global_kl, local_kl, loss = model(query, target_y)
+        mu, sigma, log_p, global_kl, local_kl, loss = model(query, None)
 
-    t = t_x[0, :, -1]
-    t = np.arange(64)
+    t_sample = t_x[0, :, -1]
+
+
+
+    # t = t_x[0, :, -1]
+    t = np.arange(len(mu) + 1)
+    pred_logy = tu.np_ify(mu[:, -1, :])
+    pred_sigma = tu.np_ify(sigma[:, -1, :])
+    label_logy = tu.np_ify(target_y[:, -1, :])
+
+    pred_logy_cum = np.concatenate([np.zeros([1, pred_logy.shape[-1]]), pred_logy.cumsum(axis=0)], axis=0)
+    label_logy_cum = np.concatenate([np.zeros([1, label_logy.shape[-1]]), label_logy.cumsum(axis=0)], axis=0)
+    pred_sigma_cum = np.concatenate([np.zeros([1, pred_sigma.shape[-1]]), pred_sigma], axis=0)
+
+    fig = plt.figure()
+    ax = []
+    for plot_i in range(4):
+        ax.append(fig.add_subplot(2, 2, plot_i+1))
+        # Plot everything
+        ax[plot_i].plot(t[:-1], pred_logy[:, plot_i], 'b', linewidth=2)
+        ax[plot_i].plot(t[:-1], label_logy[:, plot_i], 'k:', linewidth=2)
+
+        plt.fill_between(
+            t[:-1],
+            pred_logy[:, plot_i] - pred_sigma[:, plot_i],
+            pred_logy[:, plot_i] + pred_sigma[:, plot_i],
+            alpha=0.2,
+            facecolor='#65c9f7',
+            interpolate=True)
+        plt.grid('off')
+
+    file_path = os.path.join(path, 'test_{}.png'.format(ep))
+    fig.savefig(file_path)
+    plt.close(fig)
 
 
     fig = plt.figure()
-    # Plot everything
-    plt.plot(t, pred_y[0], 'b', linewidth=2)
-    plt.plot(t, target_y[0], 'k:', linewidth=2)
-    plt.plot(context_x[0], context_y[0], 'ko', markersize=5)
-    plt.fill_between(
-        target_x[0, :, 0],
-        pred_y[0, :, 0] - std[0, :, 0],
-        pred_y[0, :, 0] + std[0, :, 0],
-        alpha=0.2,
-        facecolor='#65c9f7',
-        interpolate=True)
+    ax = []
+    for plot_i in range(4):
+        ax.append(fig.add_subplot(2, 2, plot_i+1))
+        # Plot everything
+        ax[plot_i].plot(t, pred_logy_cum[:, plot_i], 'b', linewidth=2)
+        ax[plot_i].plot(t, label_logy_cum[:, plot_i], 'k:', linewidth=2)
 
-    # Make the plot pretty
-    # plt.yticks([-2, 0, 2], fontsize=16)
-    # plt.xticks([-2, 0, 2], fontsize=16)
-    # plt.ylim([-2, 2])
-    plt.grid('off')
-    ax = plt.gca()
-    file_path = os.path.join(path, 'test_{}.png'.format(ep))
-    if not os.path.exists(file_path):
-        fig.savefig(os.path.join(path, 'test_{}.png'.format(ep)))
-    else:
-        fig.savefig(os.path.join(path, 'test_{}_1.png'.format(ep)))
+        plt.fill_between(
+            t,
+            pred_logy_cum[:, plot_i] - pred_sigma_cum[:, plot_i],
+            pred_logy_cum[:, plot_i] + pred_sigma_cum[:, plot_i],
+            alpha=0.2,
+            facecolor='#65c9f7',
+            interpolate=True)
+        plt.grid('off')
+
+    file_path = os.path.join(path, 'test_cum_{}.png'.format(ep))
+    fig.savefig(file_path)
     plt.close(fig)
 
 
@@ -739,7 +768,7 @@ def main_anp():
     from model_anp import LatentModel
     from data_anp import get_data as get_data_anp, Sampler as Sampler_anp
     # name = 'apptest_adv_28'
-    name = 'anp_1'
+    name = 'anp_2'
     c = Configs(name)
 
     str_ = c.export()
@@ -764,7 +793,7 @@ def main_anp():
     dataset = sampler.get_batch_set(base_i)
     while ep < c.num_epochs:
         eval_loss = train_anp(dataset, model, optimizer, is_train=False)
-        if ep > 10 and min_eval_loss > eval_loss:
+        if min_eval_loss > eval_loss:
             model.save_to_optim()
             min_eval_loss = eval_loss
             earlystop_count = 0
@@ -772,15 +801,16 @@ def main_anp():
             earlystop_count += 1
 
         print("[base_i: {}, ep: {}] eval_loss: {} / count: {}".format(base_i, ep, eval_loss, earlystop_count))
-        # if earlystop_count >= 20:
-        #     model.load_from_optim()
-        #     plot(base_i, base_i, configs.out_path, dataset, model)
-        #
-        #     min_eval_loss = 99999
-        #     earlystop_count = 0
-        #     break
-        # if ep % 5:
-        #     plot(base_i - pred_point, base_i, configs.out_path, dataset, model)
+        if earlystop_count >= 5:
+            model.load_from_optim()
+            plot_functions(c.outpath, ep, base_i + 500, sampler, model)
+
+            min_eval_loss = 99999
+            earlystop_count = 0
+            break
+
+        if ep % 5 == 0:
+            plot_functions(c.outpath, ep, base_i, sampler, model)
 
         train_loss = train_anp(dataset, model, optimizer, is_train=True)
         ep += 1

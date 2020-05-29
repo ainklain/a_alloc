@@ -319,7 +319,8 @@ class Sampler:
             target_x = np.concatenate([self.features['macro'][selected_i[target_i]],
                                        self.features['idx'][selected_i[target_i]],
                                        t_idx[target_i]], axis=1)
-            target_y = self.labels['logy_for_calc'][target_i]
+            target_y = self.labels['logy_for_calc'][selected_i[target_i]]
+
             batch_set.append([context_x, context_y, target_x, target_y])
             # batch_set.append([torch.from_numpy(context_x).float().to(tu.device), torch.from_numpy(context_y).float().to(tu.device),
             #                   torch.from_numpy(target_x).float().to(tu.device), torch.from_numpy(target_y).float().to(tu.device)])
