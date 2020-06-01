@@ -209,7 +209,7 @@ class MyModel(Module):
             # losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
-                losses_dict['entropy'] = -HLoss()(x)
+                losses_dict['entropy'] = HLoss()(x)
                 i_dict = 0
                 for key in losses_dict.keys():
                     if loss_wgt[key] == 0:

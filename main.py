@@ -68,7 +68,9 @@ class Configs:
     def init_weight(self):
         if self.datatype == 'app':
             self.cash_idx = 3
-            self.base_weight = [0.7, 0.2, 0.1, 0.0]
+            # self.base_weight = [0.7, 0.2, 0.1, 0.0]
+            # self.base_weight = [0.4, 0.15, 0.075, 0.375]
+            self.base_weight = [0.25, 0.1, 0.05, 0.6]
             # self.base_weight = [0.4, 0.3, 0.3, 0.0]
             # self.base_weight = None
         else:
@@ -90,9 +92,9 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        # self.adaptive_loss_wgt = {'y_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.0001}
-        self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
-                                  'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': -1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.0001}
+        # self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
+        #                           'cost': 1., 'entropy': 0.001}
 
         return adaptive_flag
 
@@ -256,8 +258,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     # l_label_base, = plt.plot(x, y_label - y_base)
     # l_label_guide, = plt.plot(x, y_label - y_guide)
 
-    plt.legend(handles=(l_port_guide), labels=('port-guide'))
-    # plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+    # plt.legend(handles=(l_port_guide), labels=('port-guide'))
+    plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
 
     # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
     if insample_boundary is not None:
@@ -533,7 +535,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 if ep > 0 and ep % c.plot_freq == 0:
                     x_len = (ep // 10000 + 1) * 10000
-                    sampling_freq = (ep // 10000 + 1) * 100
+                    sampling_freq = (ep // 10000 + 1) * 1000
                     fig = plt.figure()
                     l_train, = plt.plot(x_plot[1:x_len], losses_dict['train'][1:x_len])
                     l_eval, = plt.plot(x_plot[1:x_len], losses_dict['eval'][1:x_len])
@@ -594,8 +596,8 @@ testmode = False
 def main(testmode=False):
 
     # configs & variables
-    # name = 'apptest_adv_28'
-    name = 'app_adv_1'
+    name = 'apptest_adv_30'
+    # name = 'app_adv_1'
     c = Configs(name)
 
     str_ = c.export()
