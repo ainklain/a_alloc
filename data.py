@@ -258,27 +258,27 @@ class Sampler:
         features_train_prev = dict([(key, self.features[key][train_idx-1]) for key in self.features.keys()])
         features_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
         labels_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
-        train_dataset = (features_train_prev, features_train, labels_train)
+        train_dataset = ((features_train_prev, features_train, labels_train), len(train_idx))
         # train_dataset = (self.features[train_idx], self.labels[train_idx], self.sr_labels[train_idx])
         eval_idx = np.random.choice(np.arange(eval_start_i + 1, eval_end_i), eval_end_i-eval_start_i-1, replace=False)
         features_eval_prev = dict([(key, self.features[key][eval_idx-1]) for key in self.features.keys()])
         features_eval = dict([(key, self.features[key][eval_idx]) for key in self.features.keys()])
         labels_eval = dict([(key, self.labels[key][eval_idx]) for key in self.labels.keys()])
-        eval_dataset = (features_eval_prev, features_eval, labels_eval)
+        eval_dataset = ((features_eval_prev, features_eval, labels_eval), len(eval_idx))
         # eval_dataset = (self.features[eval_idx], self.labels[eval_idx], self.sr_labels[eval_idx])
         # test_idx = np.random.choice(np.arange(test_start_i, test_end_i), test_end_i-test_start_i, replace=False)
         test_idx = np.arange(test_start_i + 1, test_end_i)
         features_test_prev = dict([(key, self.features[key][test_idx-1]) for key in self.features.keys()])
         features_test = dict([(key, self.features[key][test_idx]) for key in self.features.keys()])
         labels_test = dict([(key, self.labels[key][test_idx]) for key in self.labels.keys()])
-        test_dataset = (features_test_prev, features_test, labels_test)
+        test_dataset = ((features_test_prev, features_test, labels_test), len(test_idx))
         # test_dataset = (self.features[test_idx], self.labels[test_idx], self.sr_labels[test_idx])
 
         test_insample_idx = np.arange(train_start_i + 1, test_end_i)
         features_test_insample_prev = dict([(key, self.features[key][test_insample_idx-1]) for key in self.features.keys()])
         features_test_insample = dict([(key, self.features[key][test_insample_idx]) for key in self.features.keys()])
         labels_test_insample = dict([(key, self.labels[key][test_insample_idx]) for key in self.labels.keys()])
-        test_dataset_insample = (features_test_insample_prev, features_test_insample, labels_test_insample)
+        test_dataset_insample = ((features_test_insample_prev, features_test_insample, labels_test_insample), len(test_insample_idx))
         insample_boundary = np.concatenate([np.where(test_insample_idx == eval_start_i)[0], np.where(test_insample_idx == test_start_i)[0]])
         guide_date = [self.date_[train_start_i], self.date_[eval_start_i], self.date_[test_start_i], self.date_[test_end_i]]
         return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
@@ -306,27 +306,27 @@ class Sampler:
         features_train_prev = dict([(key, self.features[key][train_idx-1]) for key in self.features.keys()])
         features_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
         labels_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
-        train_dataset = (features_train_prev, features_train, labels_train)
+        train_dataset = (features_train_prev, features_train, labels_train, len(train_idx))
         # train_dataset = (self.features[train_idx], self.labels[train_idx], self.sr_labels[train_idx])
         eval_idx = np.random.choice(np.arange(eval_start_i + 1, eval_end_i), eval_end_i-eval_start_i-1, replace=False)
         features_eval_prev = dict([(key, self.features[key][eval_idx-1]) for key in self.features.keys()])
         features_eval = dict([(key, self.features[key][eval_idx]) for key in self.features.keys()])
         labels_eval = dict([(key, self.labels[key][eval_idx]) for key in self.labels.keys()])
-        eval_dataset = (features_eval_prev, features_eval, labels_eval)
+        eval_dataset = (features_eval_prev, features_eval, labels_eval, len(eval_idx))
         # eval_dataset = (self.features[eval_idx], self.labels[eval_idx], self.sr_labels[eval_idx])
         # test_idx = np.random.choice(np.arange(test_start_i, test_end_i), test_end_i-test_start_i, replace=False)
         test_idx = np.arange(test_start_i + 1, test_end_i)
         features_test_prev = dict([(key, self.features[key][test_idx-1]) for key in self.features.keys()])
         features_test = dict([(key, self.features[key][test_idx]) for key in self.features.keys()])
         labels_test = dict([(key, self.labels[key][test_idx]) for key in self.labels.keys()])
-        test_dataset = (features_test_prev, features_test, labels_test)
+        test_dataset = (features_test_prev, features_test, labels_test, len(test_idx))
         # test_dataset = (self.features[test_idx], self.labels[test_idx], self.sr_labels[test_idx])
 
         test_insample_idx = np.arange(train_start_i + 1, test_end_i)
         features_test_insample_prev = dict([(key, self.features[key][test_insample_idx-1]) for key in self.features.keys()])
         features_test_insample = dict([(key, self.features[key][test_insample_idx]) for key in self.features.keys()])
         labels_test_insample = dict([(key, self.labels[key][test_insample_idx]) for key in self.labels.keys()])
-        test_dataset_insample = (features_test_insample_prev, features_test_insample, labels_test_insample)
+        test_dataset_insample = (features_test_insample_prev, features_test_insample, labels_test_insample, len(test_insample_idx))
         insample_boundary = np.concatenate([np.where(test_insample_idx == eval_start_i)[0], np.where(test_insample_idx == test_start_i)[0]])
         guide_date = [self.date_[train_start_i], self.date_[eval_start_i], self.date_[test_start_i], self.date_[test_end_i]]
         return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
@@ -375,6 +375,33 @@ class Sampler:
 
 
 
+
+
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+
+
+def data_loader(dataset, batch_size=1, **kwargs):
+    my_dataset = MyDataset(dataset)
+    return DataLoader(my_dataset, batch_size=batch_size, **kwargs)
+
+
+class MyDataset(Dataset):
+    def __init__(self, dataset):
+        [self.features_prev, self.features, self.labels], self.n_samples = dataset
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx):
+        out_features_prev, out_features, out_labels = dict(), dict(), dict()
+        for key in self.features.keys():
+            out_features_prev[key] = self.features_prev[key][idx].astype(np.float32)
+            out_features[key] = self.features[key][idx].astype(np.float32)
+
+        for key in self.labels.keys():
+            out_labels[key] = self.labels[key][idx].astype(np.float32)
+
+        return out_features_prev, out_features, out_labels
 
 
 

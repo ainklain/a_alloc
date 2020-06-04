@@ -344,6 +344,28 @@ class Decoder(nn.Module):
         return dist, mu, sigma
 
 
+class Covariance(nn.Module):
+
+    def __init__(self, append_mean=True):
+        super(Covariance, self).__init__()
+        self.append_mean = append_mean
+
+    def forward(self, input):
+        mean = torch.mean(input, 2, keepdim=True)
+        x = input - mean.expand(-1, -1, input.size(2))
+        output = torch.bmm(x, x.transpose(1, 2)) / input.size(1)
+
+        if self.append_mean:
+            mean_sq = torch.bmm(mean, mean.transpose(1, 2))
+            output.add_(mean_sq)
+            output = torch.cat((output, mean), 2)
+            one = input.new(1, 1, 1).fill_(1).expand(mean.size(0), -1, -1)
+            mean = torch.cat((mean, one), 1).transpose(1, 2)
+            output = torch.cat((output, mean), 1)
+
+        return output
+
+
 class LatentModel(nn.Module):
     def __init__(self, num_hidden, d_x=1, d_y=1):
         super(LatentModel, self).__init__()
@@ -560,7 +582,7 @@ class MyModel(Module):
             guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
 
         if labels is not None:
-            next_y = torch.exp(1 + labels['logy']) - 1.
+            next_y = torch.exp(labels['logy']) - 1.
             losses_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
             losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()

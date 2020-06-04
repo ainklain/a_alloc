@@ -53,6 +53,7 @@ class MyModel(Module):
         self.out_dim = out_dim
         self.dropout_r = c.dropout_r
         self.random_guide_weight = c.random_guide_weight
+        self.random_label = c.random_label
 
         if c.base_weight is not None:
             self.guide_weight = torch.FloatTensor([c.base_weight])
@@ -69,8 +70,8 @@ class MyModel(Module):
 
         # asset allocation
         self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim)//2)
-        self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim)
-        self.aa_out_layer = XLinear(out_dim, out_dim)
+        self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim * 2)
+        self.aa_out_layer = XLinear(out_dim * 2, out_dim * 2)
 
         self.loss_func_logy = nn.MSELoss()
 
@@ -88,9 +89,10 @@ class MyModel(Module):
             x = F.dropout(x, p=self.dropout_r, training=mask)
 
         x = self.out_layer(x)
+        # print([p.grad for p in list(self.out_layer.parameters()) if p.grad is not None])
         return x
 
-    def sample_predict(self, x, n_samples):
+    def sample_predict(self, x, mc_samples):
         self.train()
         # Just copies type from x, initializes new vector
         # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
@@ -99,7 +101,7 @@ class MyModel(Module):
         #     y = self.forward(x, sample=True)
         #     predictions[i] = y
 
-        predictions = x.unsqueeze(0).repeat(n_samples, 1, 1)
+        predictions = x.unsqueeze(0).repeat(mc_samples, 1, 1)
         predictions = self.forward(predictions, sample=True)
         return predictions
 
@@ -110,15 +112,15 @@ class MyModel(Module):
         for key in labels.keys():
             labels[key].requires_grad = True
 
-        pred, losses, _, _, _ = self.forward_with_loss(features, labels, n_samples=100, loss_wgt=None)
+        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, loss_wgt=None)
 
         losses.backward(retain_graph=True)
         features_grad = dict()
         features_perturbed = dict()
         for key in features.keys():
             features_grad[key] = torch.sign(features[key].grad)
-            sample_sigma = torch.std(features[key], axis=[0], keepdims=True)
-            eps = 0.01
+            sample_sigma = torch.std(features[key] + 1e-6, axis=[0], keepdims=True)
+            eps = 0.05
             scaled_eps = eps * sample_sigma  # [1, 1, n_features]
 
             features_perturbed[key] = features[key] + scaled_eps * features_grad[key]
@@ -126,12 +128,12 @@ class MyModel(Module):
 
         return features_perturbed
 
-
-    def run(self, features, wgt, n_samples):
+    def run(self, features, wgt, mc_samples):
         x = torch.cat([features['idx'], features['macro']], dim=-1)
-        pred = self.sample_predict(x, n_samples=n_samples)
+        pred = self.sample_predict(x, mc_samples=mc_samples)
         pred_mu = torch.mean(pred, dim=0)
-        pred_sigma = torch.std(pred, dim=0)
+        with torch.set_grad_enabled(False):
+            pred_sigma = torch.std(pred + 1e-6, dim=0, unbiased=False)
 
         x = torch.cat([pred_mu, pred_sigma, wgt, x], dim=-1)
         x = self.aa_hidden_layer(x)
@@ -139,15 +141,40 @@ class MyModel(Module):
         x = self.aa_hidden_layer2(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
-        # x = F.elu(x + features['wgt'], 0.01) + 0.01 + min_wgt
-        # x = F.softmax(x)
-        x = F.sigmoid(x) + 0.001
-        x = x / x.sum(dim=1, keepdim=True)
+        wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
+        wgt_mu = 0.5 * torch.tanh(wgt_mu) + 1e-6
+        wgt_sigma = 0.1 * F.softplus(wgt_logsigma) + 1e-6
 
-        return x, pred_mu, pred_sigma
+        # x = F.sigmoid(x) + 0.001
+        # x = x / x.sum(dim=1, keepdim=True)
+
+        # return x, pred_mu, pred_sigma
+
+        return wgt_mu, wgt_sigma, pred_mu, pred_sigma
+
+
 
     @profile
-    def forward_with_loss(self, features, labels=None, n_samples=1000, loss_wgt=None, features_prev=None, is_train=True):
+    def forward_with_loss(self, features, labels=None, mc_samples=1000, loss_wgt=None, features_prev=None, is_train=True):
+        """
+        t = 2000; mc_samples = 200; is_train = True
+        dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
+        dataset['train'], dataset['eval'], dataset['test'], (dataset['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
+
+        dataset['train'], train_n_samples = dataset['train']
+
+        dataset['train'] = tu.to_device(tu.device, to_torch(dataset['train']))
+        train_features_prev, train_features, train_labels = dataset['train']
+        features_prev, features, labels = dict(), dict(), dict()
+        sampled_batch_idx = np.random.choice(np.arange(train_n_samples), c.batch_size)
+        for key in train_features.keys():
+            features_prev[key] = train_features_prev[key][sampled_batch_idx]
+            features[key] = train_features[key][sampled_batch_idx]
+
+        for key in train_labels.keys():
+            labels[key] = train_labels[key][sampled_batch_idx]
+
+        """
         # features, labels=  train_features, train_labels
 
         # x = torch.cat([features['idx'], features['macro']], dim=-1)
@@ -165,13 +192,35 @@ class MyModel(Module):
         # x = F.sigmoid(x) + 0.001
         # x = x / x.sum(dim=1, keepdim=True)
 
+        with torch.set_grad_enabled(False):
+            if is_train:
+                if np.random.rand() > self.random_guide_weight:
+                    guide_wgt = self.guide_weight.repeat(len(features['wgt']), 1).to(features['wgt'].device)
+                else:
+                    guide_wgt = torch.rand_like(features['wgt']).to(features['wgt'].device)
+                    guide_wgt = guide_wgt / guide_wgt.sum(dim=1, keepdim=True)
+            else:
+                guide_wgt = self.guide_weight.repeat(len(features['wgt']), 1).to(features['wgt'].device)
+
         if features_prev is not None:
             with torch.set_grad_enabled(False):
-                prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
+                # prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
+                prev_x, _, _, _ = self.run(features_prev, guide_wgt, mc_samples)
+                prev_x = (1. + prev_x) * guide_wgt
+                prev_x = prev_x / (prev_x.sum(-1, keepdim=True) + 1e-6)
         else:
             prev_x = features['wgt']
 
-        x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
+        # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
+        wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, prev_x, mc_samples)
+        wgt_mu = (1. + wgt_mu) * guide_wgt
+        wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
+        dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
+        if is_train:
+            x = dist.rsample().clamp(0.01, 0.99)
+            x = x / (x.sum(-1, keepdim=True) + 1e-6)
+        else:
+            x = wgt_mu
 
         if torch.isnan(x).sum() > 0:
             for n, p in list(self.named_parameters()):
@@ -185,17 +234,15 @@ class MyModel(Module):
         #     guide_wgt[replace_idx] = torch.rand(len(replace_idx), guide_wgt.shape[1])
         # guide_wgt = guide_wgt.to(x.device)
 
-        if is_train:
-            if np.random.rand() > self.random_guide_weight:
-                guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
-            else:
-                guide_wgt = torch.rand_like(x).to(x.device)
-                guide_wgt = guide_wgt / guide_wgt.sum(dim=1, keepdim=True)
-        else:
-            guide_wgt = self.guide_weight.repeat(len(x), 1).to(x.device)
-
         if labels is not None:
-            next_y = torch.exp(1 + labels['logy']) - 1.
+
+            next_y = torch.exp(labels['logy']) - 1.
+
+            with torch.set_grad_enabled(False):
+                if is_train:
+                    mask = torch.empty_like(labels['logy']).to(tu.device).uniform_() < self.random_label
+                    next_y[mask] = -next_y[mask]
+
             losses_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
             losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()
@@ -209,7 +256,8 @@ class MyModel(Module):
             # losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
-                losses_dict['entropy'] = HLoss()(x)
+                losses_dict['entropy'] = -dist.entropy().sum()
+                # losses_dict['entropy'] = HLoss()(x)
                 i_dict = 0
                 for key in losses_dict.keys():
                     if loss_wgt[key] == 0:

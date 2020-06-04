@@ -39,6 +39,7 @@ def to_device(device, list_to_device):
         elif isinstance(value_, torch.Tensor):
             list_to_device[i] = value_.to(device)
         else:
+            continue
             raise NotImplementedError
 
     return list_to_device
