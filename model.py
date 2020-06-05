@@ -142,8 +142,8 @@ class MyModel(Module):
         x = F.relu(x)
         x = self.aa_out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
-        wgt_mu = 0.5 * torch.tanh(wgt_mu) + 1e-6
-        wgt_sigma = 0.1 * F.softplus(wgt_logsigma) + 1e-6
+        wgt_mu = 0.99 * torch.tanh(wgt_mu) + 1e-6
+        wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
 
         # x = F.sigmoid(x) + 0.001
         # x = x / x.sum(dim=1, keepdim=True)

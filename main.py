@@ -27,25 +27,25 @@ class Configs:
         self.name = name
         self.lr = 5e-4
         self.batch_size = 512
-        self.num_epochs = 30000
+        self.num_epochs = 5000
         self.base_i0 = 2000
         self.mc_samples = 200
         self.sampling_freq = 20
         self.k_days = 20
-        self.label_days = 60
+        self.label_days = 20
         self.strategy_days = 250
         self.adaptive_count = 5
         self.adaptive_lrx = 2 # learning rate * 배수
-        self.es_max_count = 50
+        self.es_max_count = -1
         self.retrain_days = 240
-        self.test_days = 1000  # test days
+        self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
-        self.use_accum_data = False # [sampler] 데이터 누적할지 말지
+        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.adv_train = True
-        self.n_pretrain = 20
+        self.n_pretrain = 5
 
         self.loss_threshold = -100.
         self.adaptive_loss_threshold = -100.
@@ -99,7 +99,7 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
         #                           'cost': 1., 'entropy': 0.001}
 
@@ -373,7 +373,8 @@ def backtest(configs, sampler):
 
     ii = 0
     for t in range(c.base_i0, sampler.max_len, c.retrain_days):
-        _, _, dataset, _, _ = sampler.get_batch(t)
+        _, _, (dataset, _), _, _ = sampler.get_batch(t)
+
         features_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
 
         outpath_t = os.path.join(c.outpath, str(t))
@@ -573,7 +574,7 @@ def train(configs, model, optimizer, sampler, t=None):
                     print('[stopped] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
                     break
 
-            train_dataloader = data_loader(dataset['train'], batch_size=c.batch_size)
+            train_dataloader = data_loader(dataset['train'], batch_size=c.batch_size, shuffle=True)
             for i_loop, (train_f_prev, train_f, train_l) in enumerate(train_dataloader):
                 """
                 train_f_prev, train_f, train_l = next(iter(train_dataloader))
@@ -583,7 +584,7 @@ def train(configs, model, optimizer, sampler, t=None):
                 if c.adv_train is True:
                     train_f = model.adversarial_noise(train_f, train_l)
 
-                _, losses_train, _, _, _ = model.forward_with_loss(train_f, train_l
+                _, losses_train, _, _, losses_train_dict = model.forward_with_loss(train_f, train_l
                                                                    , mc_samples=c.mc_samples
                                                                    , loss_wgt=c.loss_wgt
                                                                    , features_prev=train_f_prev)
@@ -597,6 +598,13 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), c.clip)
                 optimizer.step()
+
+                if ep % 20 == 0:
+                    str_train = "ep: {} iloop: {} train_loss: {} / ".format(ep, i_loop, losses_train_np)
+                    for key in losses_train_dict.keys():
+                        str_train += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_train_dict[key]) * c.loss_wgt[key]))
+
+                    print(str_train)
 
             if ep % 20 == 0:
                 print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_dict['train'][ep], losses_eval, str_))
@@ -620,13 +628,13 @@ testmode = False
 @profile
 def main(testmode=False):
 
-    base_weight = dict(h=[0.7, 0.2, 0.1, 0.0],
+    base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
                        m=[0.4, 0.15, 0.075, 0.375],
                        l=[0.25, 0.1, 0.05, 0.6])
 
-    for key in base_weight.keys():
+    for key in ['l', 'm', 'h']:
     # configs & variables
-        name = 'apptest_new_1_{}'.format(key)
+        name = 'apptest_new_4_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
         c.base_weight = base_weight[key]
@@ -646,7 +654,7 @@ def main(testmode=False):
         model.train()
         model.to(tu.device)
 
-        train(c, model, optimizer, sampler, )
+        train(c, model, optimizer, sampler, 2500)
         # train(c, model, optimizer, sampler, t=1700)
 
         backtest(c, sampler)

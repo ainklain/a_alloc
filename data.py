@@ -240,10 +240,10 @@ class Sampler:
 
         if self.use_accum_data:
             train_base_i = self.add_infos['min_begin_i']
-            eval_base_i = int(train_base_i + 0.6 * (i - train_base_i))
+            eval_base_i = int(train_base_i + 0.9 * (i - train_base_i))
         else:
             train_base_i = max(self.add_infos['min_begin_i'], i - self.train_data_len)
-            eval_base_i = int(train_base_i + 0.6 * min(self.train_data_len, i - train_base_i))
+            eval_base_i = int(train_base_i + 0.9 * min(self.train_data_len, i - train_base_i))
 
         test_base_i = i
 
@@ -381,6 +381,7 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 
 def data_loader(dataset, batch_size=1, **kwargs):
+    """shuffle /num_workers/pin_memory"""
     my_dataset = MyDataset(dataset)
     return DataLoader(my_dataset, batch_size=batch_size, **kwargs)
 
