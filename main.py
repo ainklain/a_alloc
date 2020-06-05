@@ -1,3 +1,4 @@
+from copy import deepcopy
 import random
 import re
 import os
@@ -27,34 +28,38 @@ class Configs:
         self.name = name
         self.lr = 5e-4
         self.batch_size = 512
-        self.num_epochs = 30000
+        self.num_epochs = 5000
         self.base_i0 = 2000
         self.mc_samples = 200
         self.sampling_freq = 20
         self.k_days = 20
-        self.label_days = 60
+        self.label_days = 20
         self.strategy_days = 250
         self.adaptive_count = 5
         self.adaptive_lrx = 2 # learning rate * 배수
+
+        self.es_type = 'train'  # 'eval'
         self.es_max_count = 50
         self.retrain_days = 240
-        self.test_days = 1000  # test days
+        self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
-        self.use_accum_data = False # [sampler] 데이터 누적할지 말지
+        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.adv_train = True
-        self.n_pretrain = 20
+        self.n_pretrain = 5
 
-        self.loss_threshold = -100.
-        self.adaptive_loss_threshold = -100.
+        self.loss_threshold = -10
+        self.adaptive_loss_threshold = -10
 
         self.datatype = 'app'
         # self.datatype = 'inv'
 
         self.cost_rate = 0.003
-        self.plot_freq = 100
+        self.plot_freq = 10
+        self.eval_freq = 1 # 20
+        self.save_freq = 20
         self.model_init_everytime = True
 
         self.hidden_dim = [72, 48, 32]
@@ -99,7 +104,7 @@ class Configs:
         self.min_eval_loss = 999999
         self.es_count = 0
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
         #                           'cost': 1., 'entropy': 0.001}
 
@@ -124,7 +129,17 @@ def calc_y(wgt0, y1, cost_r=0.):
     return y, turnover
 
 
-def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, suffix='', outpath='./out/', guide_weight=None):
+def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, cost_rate=0.003, suffix='', outpath='./out/', guide_weight=None):
+    """
+
+    features, labels =  f_dict['test_insample'], l_dict['test_insample']
+    mc_samples=c.mc_samples
+    k_days=c.k_days
+    outpath=outpath_t
+    cost_rate=c.cost_rate
+    guide_weight=c.base_weight
+    """
+
     # ep=0; n_samples = 100; k_days = 20; model, features, labels, insample_boundary = main(testmode=True)
     # features, labels = test_features, test_labels
     # features, labels = test_insample_features, test_insamples_labels
@@ -144,7 +159,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     wgt_base_cum = wgt_base.cumsum(axis=1)
     fig = plt.figure()
     fig.suptitle('Weight Diff')
-    ax1 = fig.add_subplot(311)
+    # ax1 = fig.add_subplot(311)
+    ax1 = fig.add_subplot(211)
     ax1.set_title('base')
     for i in range(n_asset):
         if i == 0:
@@ -153,7 +169,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
             ax1.fill_between(x, wgt_base_cum[:, i-1], wgt_base_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
 
     wgt_result_cum = wgt_result.cumsum(axis=1)
-    ax2 = fig.add_subplot(312)
+    # ax2 = fig.add_subplot(312)
+    ax2 = fig.add_subplot(212)
     ax2.set_title('result')
     for i in range(n_asset):
         if i == 0:
@@ -161,14 +178,15 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
         else:
             ax2.fill_between(x, wgt_result_cum[:, i-1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
 
-    wgt_label_cum = wgt_label.cumsum(axis=1)
-    ax3 = fig.add_subplot(313)
-    ax3.set_title('label')
-    for i in range(n_asset):
-        if i == 0:
-            ax3.fill_between(x, 0, wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-        else:
-            ax3.fill_between(x, wgt_label_cum[:, i-1], wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+    # wgt_label_cum = wgt_label.cumsum(axis=1)
+    # ax3 = fig.add_subplot(313)
+    # ax1 = fig.add_subplot(313)
+    # ax3.set_title('label')
+    # for i in range(n_asset):
+    #     if i == 0:
+    #         ax3.fill_between(x, 0, wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+    #     else:
+    #         ax3.fill_between(x, wgt_label_cum[:, i-1], wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
 
     if insample_boundary is not None:
         ax1.axvline(insample_boundary[0])
@@ -177,8 +195,8 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
         ax2.axvline(insample_boundary[0])
         ax2.axvline(insample_boundary[1])
 
-        ax3.axvline(insample_boundary[0])
-        ax3.axvline(insample_boundary[1])
+        # ax3.axvline(insample_boundary[0])
+        # ax3.axvline(insample_boundary[1])
 
         ax1.text(x[0], ax1.get_ylim()[1], guide_date[0]
                  , horizontalalignment='center'
@@ -188,11 +206,11 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-        ax1.text(insample_boundary[1], ax1.get_ylim()[1], guide_date[2]
+        ax2.text(insample_boundary[1], ax1.get_ylim()[1], guide_date[2]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-        ax1.text(x[-1], ax1.get_ylim()[1], guide_date[3]
+        ax2.text(x[-1], ax1.get_ylim()[1], guide_date[3]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
@@ -201,12 +219,10 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     plt.close(fig)
 
     # #######################
-
     y_next = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[::k_days, :]
     wgt_base_calc = wgt_base[::k_days, :]
     wgt_result_calc = wgt_result[::k_days, :]
     wgt_label_calc = wgt_label[::k_days, :]
-    # date_base.append(sampler.add_infos['date'][t])
 
     # features, labels = test_features, test_labels; wgt = wgt_result
     # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
@@ -216,6 +232,9 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     y_port = np.insert(np.sum((1+y_next) * wgt_result_calc, axis=1), 0, 1.)
     y_label = np.insert(np.sum((1+y_next) * wgt_label_calc, axis=1), 0, 1.)
     y_eq = np.insert(np.mean(1+y_next, axis=1), 0, 1.)
+
+
+
     if guide_weight is not None:
         y_guide = np.insert(np.sum((1+y_next) * np.array(guide_weight), axis=1), 0, 1.)
     else:
@@ -223,32 +242,76 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
 
     x = np.arange(len(y_base))
 
-    fig = plt.figure()
-    ax = plt.gca()
-    # l_base, = plt.plot(x, y_base.cumprod())
-    l_port, = plt.plot(x, y_port.cumprod())
-    # l_label, = plt.plot(x, y_label.cumprod())
-    l_eq, = plt.plot(x, y_eq.cumprod())
-    l_guide, = plt.plot(x, y_guide.cumprod())
-    plt.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
-    # plt.legend(handles=(l_base, l_port, l_label, l_eq, l_guide), labels=('base', 'port', 'label', 'eq', 'guide'))
-    if insample_boundary is not None:
-        plt.axvline(insample_boundary[0] / k_days)
-        plt.axvline(insample_boundary[1] / k_days)
 
-        plt.text(x[0], ax.get_ylim()[1], guide_date[0]
+    # save data
+    if guide_date is not None:
+        date_ = sampler.date_[(sampler.date_ >= guide_date[0]) & (sampler.date_ < guide_date[-1])]
+        date_test_selected = ((date_ >= guide_date[-2]) & (date_ < guide_date[-1]))[::k_days]
+
+        date_selected = list(date_)[::k_days]
+        # date_base.append(sampler.add_infos['date'][t])
+
+        y_base_with_c, turnover_base = calc_y(wgt_base_calc, y_next, cost_rate)
+        y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
+        y_label_with_c, turnover_label = calc_y(wgt_label_calc, y_next, cost_rate)
+
+        idx_list = sampler.add_infos['idx_list']
+        columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']
+        df = pd.DataFrame(data=np.concatenate([wgt_result_calc, y_next,
+                        y_port_with_c['before_cost'][1:, np.newaxis], y_label_with_c['before_cost'][1:, np.newaxis],
+                        y_port_with_c['after_cost'][1:, np.newaxis], y_label_with_c['after_cost'][1:, np.newaxis]
+                        ], axis=-1),
+                          index=date_selected
+                          , columns=columns)
+
+        df_all = df.loc[:, ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']]
+        df_test = df.loc[date_test_selected, ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']]
+        df_stats = pd.concat({'mu_all': df_all.mean() * 12,
+                           'sig_all': df_all.std(ddof=1) * np.sqrt(12),
+                           'sr_all': df_all.mean() / df_all.std(ddof=1) * np.sqrt(12),
+                           'mu_test': df_test.mean() * 12,
+                           'sig_test': df_test.std(ddof=1) * np.sqrt(12),
+                           'sr_test': df_test.mean() / df_test.std(ddof=1) * np.sqrt(12)},
+                          axis=1)
+
+        print(df_stats)
+        df.to_csv(os.path.join(outpath, 'all_data.csv'))
+        df_stats.to_csv(os.path.join(outpath, 'stats.csv'))
+
+    # ################ together
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(211)
+    # ax = plt.gca()
+    l_port, = ax1.plot(x, y_port.cumprod())
+    l_eq, = ax1.plot(x, y_eq.cumprod())
+    l_guide, = ax1.plot(x, y_guide.cumprod())
+    ax1.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
+
+    ax2 = fig.add_subplot(212)
+    l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
+    l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
+    ax2.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+
+    if insample_boundary is not None:
+        ax1.axvline(insample_boundary[0] / k_days)
+        ax1.axvline(insample_boundary[1] / k_days)
+        ax2.axvline(insample_boundary[0] / k_days)
+        ax2.axvline(insample_boundary[1] / k_days)
+
+        ax1.text(x[0], ax1.get_ylim()[1], guide_date[0]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
+        ax1.text(insample_boundary[0] // k_days, ax1.get_ylim()[1], guide_date[1]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
+        ax2.text(insample_boundary[1] // k_days, ax2.get_ylim()[1], guide_date[2]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
+        ax2.text(x[-1], ax2.get_ylim()[1], guide_date[3]
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
@@ -256,47 +319,82 @@ def plot_each(ep, model, features, labels, insample_boundary=None, guide_date=No
     fig.savefig(os.path.join(outpath, 'test_y_{}{}.png'.format(ep, suffix)))
     plt.close(fig)
 
-    fig = plt.figure()
-    ax = plt.gca()
-    l_port_guide, = plt.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
-    l_port_eq, = plt.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
-    # l_port_base, = plt.plot(x, y_port - y_base)
-    # l_port_eq, = plt.plot(x, y_port - y_eq)
-    # l_label_base, = plt.plot(x, y_label - y_base)
-    # l_label_guide, = plt.plot(x, y_label - y_guide)
 
-    # plt.legend(handles=(l_port_guide), labels=('port-guide'))
-    plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+    # # ##################### seperate
+    # fig = plt.figure()
+    # ax = plt.gca()
+    # # l_base, = plt.plot(x, y_base.cumprod())
+    # l_port, = plt.plot(x, y_port.cumprod())
+    # # l_label, = plt.plot(x, y_label.cumprod())
+    # l_eq, = plt.plot(x, y_eq.cumprod())
+    # l_guide, = plt.plot(x, y_guide.cumprod())
+    # plt.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
+    # # plt.legend(handles=(l_base, l_port, l_label, l_eq, l_guide), labels=('base', 'port', 'label', 'eq', 'guide'))
+    # if insample_boundary is not None:
+    #     plt.axvline(insample_boundary[0] / k_days)
+    #     plt.axvline(insample_boundary[1] / k_days)
+    #
+    #     plt.text(x[0], ax.get_ylim()[1], guide_date[0]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #
+    # fig.savefig(os.path.join(outpath, 'test_y_{}{}.png'.format(ep, suffix)))
+    # plt.close(fig)
+    #
+    # fig = plt.figure()
+    # ax = plt.gca()
+    # l_port_guide, = plt.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
+    # l_port_eq, = plt.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
+    # # l_port_base, = plt.plot(x, y_port - y_base)
+    # # l_port_eq, = plt.plot(x, y_port - y_eq)
+    # # l_label_base, = plt.plot(x, y_label - y_base)
+    # # l_label_guide, = plt.plot(x, y_label - y_guide)
+    #
+    # # plt.legend(handles=(l_port_guide), labels=('port-guide'))
+    # plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+    #
+    # # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
+    # if insample_boundary is not None:
+    #     plt.axvline(insample_boundary[0] / k_days)
+    #     plt.axvline(insample_boundary[1] / k_days)
+    #
+    #     plt.text(x[0], ax.get_ylim()[1], guide_date[0]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #     plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
+    #              , horizontalalignment='center'
+    #              , verticalalignment='center'
+    #              , bbox=dict(facecolor='white', alpha=0.7))
+    #
+    # fig.savefig(os.path.join(outpath, 'test_y_diff_{}{}.png'.format(ep, suffix)))
+    # plt.close(fig)
 
-    # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
-    if insample_boundary is not None:
-        plt.axvline(insample_boundary[0] / k_days)
-        plt.axvline(insample_boundary[1] / k_days)
-
-        plt.text(x[0], ax.get_ylim()[1], guide_date[0]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-
-    fig.savefig(os.path.join(outpath, 'test_y_diff_{}{}.png'.format(ep, suffix)))
-    plt.close(fig)
-
-    fig = plt.figure()
-    plt.plot(x[:-1], active_share)
-    fig.savefig(os.path.join(outpath, 'test_activeshare_{}{}.png'.format(ep, suffix)))
-    plt.close(fig)
+    # fig = plt.figure()
+    # plt.plot(x[:-1], active_share)
+    # fig.savefig(os.path.join(outpath, 'test_activeshare_{}{}.png'.format(ep, suffix)))
+    # plt.close(fig)
 
 
 def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
@@ -373,8 +471,8 @@ def backtest(configs, sampler):
 
     ii = 0
     for t in range(c.base_i0, sampler.max_len, c.retrain_days):
-        _, _, dataset, _, _ = sampler.get_batch(t)
-        features_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
+        _, _, (dataset, _), _, _ = sampler.get_batch(t)
+        features_prev, labels_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
 
         outpath_t = os.path.join(c.outpath, str(t))
         load_model(outpath_t, model, optimizer)
@@ -472,30 +570,39 @@ def train(configs, model, optimizer, sampler, t=None):
         # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1/10, last_epoch=-1)
 
         # ################ data processing in loop ################
-        dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
-        dataset['train'], dataset['eval'], dataset['test'], (dataset['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
-        for key in ['eval', 'test', 'test_insample']:
-            dataset[key], _ = dataset[key]
-            tu.to_device(tu.device, to_torch(dataset[key]))
+        dataset_cpu, dataset = {}, {}
+        f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
+        dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
+        for key in dataset_cpu.keys():
+            dataset[key] = deepcopy(dataset_cpu[key][0])
+            dataset[key] = tu.to_device(tu.device, to_torch(dataset[key]))
+
+            if key == 'eval':
+                f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[c.es_type]
+            else:
+                f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[key]
+
+        # eval_features_prev, eval_features, eval_labels = dataset[c.es_type]
+        # test_features_prev, test_features, test_labels = dataset['test']
+        # testin_features_prev, testin_features, testin_labels = dataset['test_insample']
 
         loss_threshold = c.loss_threshold
         for ep in range(c.num_epochs):
             # if ep > 0:
             #     print(losses_train_np, losses_eval, losses_test)
-            if ep % 20 == 0:
+            if ep % c.eval_freq == 0:
                 with torch.set_grad_enabled(False):
-                    eval_features_prev, eval_features, eval_labels = dataset['eval']
-                    tu.to_device(tu.device, to_torch([eval_features_prev, eval_features, eval_labels]))
-                    _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(eval_features, eval_labels
+                    _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(f_dict['eval'], l_dict['eval']
                                                                                      , mc_samples=c.mc_samples
                                                                                      , loss_wgt=c.loss_wgt
-                                                                                     , features_prev=eval_features_prev)
+                                                                                     , features_prev=f_prev_dict['eval']
+                                                                                     , labels_prev=l_prev_dict['eval'])
 
                     losses_eval = tu.np_ify(losses_eval)
 
                     losses_dict['eval'][ep] = float(losses_eval)
 
-                if ep >= c.n_pretrain * 20:
+                if ep >= c.n_pretrain * c.eval_freq:
                     if losses_eval > c.min_eval_loss:
                         c.es_count += 1
                     else:
@@ -507,28 +614,28 @@ def train(configs, model, optimizer, sampler, t=None):
                 for key in losses_eval_dict.keys():
                     str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * c.loss_wgt[key]))
 
-                test_features_prev, test_features, test_labels = dataset['test']
-                _, losses_test, _, _, loss_test_dict = model.forward_with_loss(test_features, test_labels
+                _, losses_test, _, _, loss_test_dict = model.forward_with_loss(f_dict['test'], l_dict['test']
                                                                                , mc_samples=c.mc_samples
                                                                                , loss_wgt=c.loss_wgt
-                                                                               , features_prev=test_features_prev
+                                                                               , features_prev=f_prev_dict['test']
+                                                                               , labels_prev=l_prev_dict['test']
                                                                                , is_train=False)
 
                 losses_dict['test'][ep] = float(losses_test)
                 save_model(outpath_t, ep, model, optimizer)
                 suffix = "_e[{:2.2f}]test[{:2.2f}]".format(losses_eval, losses_test)
-                if ep % c.plot_freq == 0:
-                    testin_features_prev, testin_features, testin_labels = dataset['test_insample']
-                    plot_each(ep, model, testin_features, testin_labels
+                if ep % (c.plot_freq * c.eval_freq) == 0:
+                    plot_each(ep, sampler, model, f_dict['test_insample'], l_dict['test_insample']
                               , insample_boundary=insample_boundary
                               , guide_date=guide_date
                               , mc_samples=c.mc_samples
                               , k_days=c.k_days
+                              , cost_rate=c.cost_rate
                               , suffix=suffix
                               , outpath=outpath_t
                               , guide_weight=c.base_weight)
 
-                if ep > 0 and ep % c.plot_freq == 0:
+                if ep > 0 and ep % (c.plot_freq * c.eval_freq) == 0:
                     x_len = (ep // 10000 + 1) * 10000
                     sampling_freq = (ep // 10000 + 1) * 1000
                     fig = plt.figure()
@@ -573,20 +680,21 @@ def train(configs, model, optimizer, sampler, t=None):
                     print('[stopped] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
                     break
 
-            train_dataloader = data_loader(dataset['train'], batch_size=c.batch_size)
-            for i_loop, (train_f_prev, train_f, train_l) in enumerate(train_dataloader):
+            train_dataloader = data_loader(dataset_cpu['train'], batch_size=c.batch_size)
+            for i_loop, (train_f_prev, train_l_prev, train_f, train_l) in enumerate(train_dataloader):
                 """
-                train_f_prev, train_f, train_l = next(iter(train_dataloader))
+                train_f_prev, train_l_prev, train_f, train_l = next(iter(train_dataloader))
                 """
-                train_f_prev, train_f, train_l = tu.to_device(tu.device, [train_f_prev, train_f, train_l])
+                train_f_prev, train_l_prev, train_f, train_l = tu.to_device(tu.device, [train_f_prev, train_l_prev, train_f, train_l])
 
                 if c.adv_train is True:
-                    train_f = model.adversarial_noise(train_f, train_l)
+                    train_f = model.adversarial_noise(train_f, train_l, features_prev=train_f_prev, labels_prev=train_l_prev)
 
                 _, losses_train, _, _, _ = model.forward_with_loss(train_f, train_l
                                                                    , mc_samples=c.mc_samples
                                                                    , loss_wgt=c.loss_wgt
-                                                                   , features_prev=train_f_prev)
+                                                                   , features_prev=train_f_prev
+                                                                   , labels_prev=train_l_prev)
 
                 # schedule.step()
                 losses_train_np = tu.np_ify(losses_train)
@@ -598,20 +706,20 @@ def train(configs, model, optimizer, sampler, t=None):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), c.clip)
                 optimizer.step()
 
-            if ep % 20 == 0:
+            if ep % c.eval_freq == 0:
                 print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_dict['train'][ep], losses_eval, str_))
 
         model.load_from_optim()
-        testin_features_prev, testin_features, testin_labels = dataset['test_insample']
-        plot_each(c.num_epochs + 20000, model, testin_features, testin_labels
+        plot_each(c.num_epochs + 20000, sampler, model, f_dict['test_insample'], l_dict['test_insample']
                   , insample_boundary=insample_boundary, guide_date=guide_date
                   , mc_samples=c.mc_samples, k_days=c.k_days
+                  , cost_rate=c.cost_rate
                   , suffix=suffix + "_{}".format(t), outpath=outpath_t
                   , guide_weight=c.base_weight)
 
-        test_features_prev, test_features, test_labels = dataset['test']
-        plot_each(c.num_epochs + 20000, model, test_features, test_labels
+        plot_each(c.num_epochs + 20000, sampler, model, f_dict['test'], l_dict['test']
                   , mc_samples=c.mc_samples, k_days=c.k_days
+                  , cost_rate=c.cost_rate
                   , suffix=suffix + "_{}_test".format(t), outpath=outpath_t
                   , guide_weight=c.base_weight)
 
@@ -620,13 +728,13 @@ testmode = False
 @profile
 def main(testmode=False):
 
-    base_weight = dict(h=[0.7, 0.2, 0.1, 0.0],
+    base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
                        m=[0.4, 0.15, 0.075, 0.375],
                        l=[0.25, 0.1, 0.05, 0.6])
 
-    for key in base_weight.keys():
+    for key in ['l','m','h']:
     # configs & variables
-        name = 'apptest_new_1_{}'.format(key)
+        name = 'apptest_new_7_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
         c.base_weight = base_weight[key]
@@ -646,7 +754,7 @@ def main(testmode=False):
         model.train()
         model.to(tu.device)
 
-        train(c, model, optimizer, sampler, )
+        train(c, model, optimizer, sampler, 3000)
         # train(c, model, optimizer, sampler, t=1700)
 
         backtest(c, sampler)

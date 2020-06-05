@@ -198,15 +198,16 @@ def get_data(configs):
 
 
 def to_torch(dataset):
-    features_prev_dict, features_dict, labels_dict = dataset
-    for key in features_dict.keys():
-        features_prev_dict[key] = torch.tensor(features_prev_dict[key], dtype=torch.float32)
-        features_dict[key] = torch.tensor(features_dict[key], dtype=torch.float32)
+    f_prev_dict, l_prev_dict, f_dict, l_dict = dataset
+    for key in f_dict.keys():
+        f_prev_dict[key] = torch.tensor(f_prev_dict[key], dtype=torch.float32)
+        f_dict[key] = torch.tensor(f_dict[key], dtype=torch.float32)
 
-    for key in labels_dict.keys():
-        labels_dict[key] = torch.tensor(labels_dict[key], dtype=torch.float32)
+    for key in l_dict.keys():
+        l_prev_dict[key] = torch.tensor(l_prev_dict[key], dtype=torch.float32)
+        l_dict[key] = torch.tensor(l_dict[key], dtype=torch.float32)
 
-    return [features_prev_dict, features_dict, labels_dict]
+    return [f_prev_dict, l_prev_dict, f_dict, l_dict]
 
 
 # sampler = Sampler(features, labels, init_train_len=500, label_days=130)
@@ -220,6 +221,7 @@ class Sampler:
         self.init_train_len = c.init_train_len
 
         self.train_data_len = c.train_data_len
+        self.k_days = c.k_days
         self.label_days = c.label_days
         self.test_days = c.test_days
         self.use_accum_data = c.use_accum_data
@@ -240,45 +242,49 @@ class Sampler:
 
         if self.use_accum_data:
             train_base_i = self.add_infos['min_begin_i']
-            eval_base_i = int(train_base_i + 0.6 * (i - train_base_i))
+            eval_base_i = int(train_base_i + 0.95 * (i - train_base_i))
         else:
             train_base_i = max(self.add_infos['min_begin_i'], i - self.train_data_len)
-            eval_base_i = int(train_base_i + 0.6 * min(self.train_data_len, i - train_base_i))
+            eval_base_i = int(train_base_i + 0.95 * min(self.train_data_len, i - train_base_i))
 
         test_base_i = i
 
-        train_start_i = train_base_i
+        train_start_i = train_base_i + self.k_days
         train_end_i = eval_base_i - self.label_days
-        eval_start_i = eval_base_i
+        eval_start_i = eval_base_i + self.k_days
         eval_end_i = test_base_i - self.label_days
         test_start_i = test_base_i
         test_end_i = min(i + self.test_days, self.max_len)
 
-        train_idx = np.random.choice(np.arange(train_start_i + 1, train_end_i), train_end_i-train_start_i-1, replace=False)
-        features_train_prev = dict([(key, self.features[key][train_idx-1]) for key in self.features.keys()])
-        features_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
-        labels_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
-        train_dataset = ((features_train_prev, features_train, labels_train), len(train_idx))
+        train_idx = np.random.choice(np.arange(train_start_i, train_end_i), train_end_i-train_start_i-1, replace=False)
+        f_train_prev = dict([(key, self.features[key][train_idx-self.k_days-1]) for key in self.features.keys()])
+        l_train_prev = dict([(key, self.labels[key][train_idx-self.k_days-1]) for key in self.labels.keys()])
+        f_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
+        l_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
+        train_dataset = ((f_train_prev, l_train_prev, f_train, l_train), len(train_idx))
         # train_dataset = (self.features[train_idx], self.labels[train_idx], self.sr_labels[train_idx])
-        eval_idx = np.random.choice(np.arange(eval_start_i + 1, eval_end_i), eval_end_i-eval_start_i-1, replace=False)
-        features_eval_prev = dict([(key, self.features[key][eval_idx-1]) for key in self.features.keys()])
-        features_eval = dict([(key, self.features[key][eval_idx]) for key in self.features.keys()])
-        labels_eval = dict([(key, self.labels[key][eval_idx]) for key in self.labels.keys()])
-        eval_dataset = ((features_eval_prev, features_eval, labels_eval), len(eval_idx))
+        eval_idx = np.random.choice(np.arange(eval_start_i, eval_end_i), eval_end_i-eval_start_i-1, replace=False)
+        f_eval_prev = dict([(key, self.features[key][eval_idx-self.k_days-1]) for key in self.features.keys()])
+        l_eval_prev = dict([(key, self.labels[key][eval_idx-self.k_days-1]) for key in self.labels.keys()])
+        f_eval = dict([(key, self.features[key][eval_idx]) for key in self.features.keys()])
+        l_eval = dict([(key, self.labels[key][eval_idx]) for key in self.labels.keys()])
+        eval_dataset = ((f_eval_prev, l_eval_prev, f_eval, l_eval), len(eval_idx))
         # eval_dataset = (self.features[eval_idx], self.labels[eval_idx], self.sr_labels[eval_idx])
         # test_idx = np.random.choice(np.arange(test_start_i, test_end_i), test_end_i-test_start_i, replace=False)
-        test_idx = np.arange(test_start_i + 1, test_end_i)
-        features_test_prev = dict([(key, self.features[key][test_idx-1]) for key in self.features.keys()])
-        features_test = dict([(key, self.features[key][test_idx]) for key in self.features.keys()])
-        labels_test = dict([(key, self.labels[key][test_idx]) for key in self.labels.keys()])
-        test_dataset = ((features_test_prev, features_test, labels_test), len(test_idx))
+        test_idx = np.arange(test_start_i, test_end_i)
+        f_test_prev = dict([(key, self.features[key][test_idx-self.k_days-1]) for key in self.features.keys()])
+        l_test_prev = dict([(key, self.labels[key][test_idx-self.k_days-1]) for key in self.labels.keys()])
+        f_test = dict([(key, self.features[key][test_idx]) for key in self.features.keys()])
+        l_test = dict([(key, self.labels[key][test_idx]) for key in self.labels.keys()])
+        test_dataset = ((f_test_prev, l_test_prev, f_test, l_test), len(test_idx))
         # test_dataset = (self.features[test_idx], self.labels[test_idx], self.sr_labels[test_idx])
 
-        test_insample_idx = np.arange(train_start_i + 1, test_end_i)
-        features_test_insample_prev = dict([(key, self.features[key][test_insample_idx-1]) for key in self.features.keys()])
-        features_test_insample = dict([(key, self.features[key][test_insample_idx]) for key in self.features.keys()])
-        labels_test_insample = dict([(key, self.labels[key][test_insample_idx]) for key in self.labels.keys()])
-        test_dataset_insample = ((features_test_insample_prev, features_test_insample, labels_test_insample), len(test_insample_idx))
+        test_insample_idx = np.arange(train_start_i, test_end_i)
+        f_test_insample_prev = dict([(key, self.features[key][test_insample_idx-self.k_days-1]) for key in self.features.keys()])
+        l_test_insample_prev = dict([(key, self.labels[key][test_insample_idx-self.k_days-1]) for key in self.labels.keys()])
+        f_test_insample = dict([(key, self.features[key][test_insample_idx]) for key in self.features.keys()])
+        l_test_insample = dict([(key, self.labels[key][test_insample_idx]) for key in self.labels.keys()])
+        test_dataset_insample = ((f_test_insample_prev, l_test_insample_prev, f_test_insample, l_test_insample), len(test_insample_idx))
         insample_boundary = np.concatenate([np.where(test_insample_idx == eval_start_i)[0], np.where(test_insample_idx == test_start_i)[0]])
         guide_date = [self.date_[train_start_i], self.date_[eval_start_i], self.date_[test_start_i], self.date_[test_end_i]]
         return train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary), guide_date
@@ -387,21 +393,22 @@ def data_loader(dataset, batch_size=1, **kwargs):
 
 class MyDataset(Dataset):
     def __init__(self, dataset):
-        [self.features_prev, self.features, self.labels], self.n_samples = dataset
+        [self.f_prev, self.l_prev, self.f, self.l], self.n_samples = dataset
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        out_features_prev, out_features, out_labels = dict(), dict(), dict()
-        for key in self.features.keys():
-            out_features_prev[key] = self.features_prev[key][idx].astype(np.float32)
-            out_features[key] = self.features[key][idx].astype(np.float32)
+        out_f_prev, out_l_prev, out_f, out_l = dict(), dict(), dict(), dict()
+        for key in self.f.keys():
+            out_f_prev[key] = self.f_prev[key][idx].astype(np.float32)
+            out_f[key] = self.f[key][idx].astype(np.float32)
 
-        for key in self.labels.keys():
-            out_labels[key] = self.labels[key][idx].astype(np.float32)
+        for key in self.l.keys():
+            out_l_prev[key] = self.l_prev[key][idx].astype(np.float32)
+            out_l[key] = self.l[key][idx].astype(np.float32)
 
-        return out_features_prev, out_features, out_labels
+        return out_f_prev, out_l_prev, out_f, out_l
 
 
 

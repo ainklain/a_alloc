@@ -105,14 +105,15 @@ class MyModel(Module):
         predictions = self.forward(predictions, sample=True)
         return predictions
 
-    def adversarial_noise(self, features, labels):
+    def adversarial_noise(self, features, labels, features_prev=None, labels_prev=None):
         for key in features.keys():
             features[key].requires_grad = True
 
         for key in labels.keys():
             labels[key].requires_grad = True
 
-        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, loss_wgt=None)
+        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, loss_wgt=None,
+                                                       features_prev=features_prev, labels_prev=labels_prev)
 
         losses.backward(retain_graph=True)
         features_grad = dict()
@@ -142,8 +143,8 @@ class MyModel(Module):
         x = F.relu(x)
         x = self.aa_out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
-        wgt_mu = 0.5 * torch.tanh(wgt_mu) + 1e-6
-        wgt_sigma = 0.1 * F.softplus(wgt_logsigma) + 1e-6
+        wgt_mu = 0.99 * torch.tanh(wgt_mu) + 1e-6
+        wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
 
         # x = F.sigmoid(x) + 0.001
         # x = x / x.sum(dim=1, keepdim=True)
@@ -155,7 +156,7 @@ class MyModel(Module):
 
 
     @profile
-    def forward_with_loss(self, features, labels=None, mc_samples=1000, loss_wgt=None, features_prev=None, is_train=True):
+    def forward_with_loss(self, features, labels=None, mc_samples=1000, loss_wgt=None, features_prev=None, labels_prev=None, is_train=True):
         """
         t = 2000; mc_samples = 200; is_train = True
         dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
@@ -164,14 +165,15 @@ class MyModel(Module):
         dataset['train'], train_n_samples = dataset['train']
 
         dataset['train'] = tu.to_device(tu.device, to_torch(dataset['train']))
-        train_features_prev, train_features, train_labels = dataset['train']
-        features_prev, features, labels = dict(), dict(), dict()
+        train_features_prev, train_labels_prev, train_features, train_labels = dataset['train']
+        features_prev, labels_prev, features, labels = dict(), dict(), dict(), dict()
         sampled_batch_idx = np.random.choice(np.arange(train_n_samples), c.batch_size)
         for key in train_features.keys():
             features_prev[key] = train_features_prev[key][sampled_batch_idx]
             features[key] = train_features[key][sampled_batch_idx]
 
         for key in train_labels.keys():
+            labels_prev[key] = train_labels_prev[key][sampled_batch_idx]
             labels[key] = train_labels[key][sampled_batch_idx]
 
         """
@@ -235,12 +237,11 @@ class MyModel(Module):
         # guide_wgt = guide_wgt.to(x.device)
 
         if labels is not None:
-
-            next_y = torch.exp(labels['logy']) - 1.
+            next_y = torch.exp(labels['logy_for_calc']) - 1.
 
             with torch.set_grad_enabled(False):
                 if is_train:
-                    mask = torch.empty_like(labels['logy']).to(tu.device).uniform_() < self.random_label
+                    mask = torch.empty_like(labels['logy_for_calc']).to(tu.device).uniform_() < self.random_label
                     next_y[mask] = -next_y[mask]
 
             losses_dict = dict()
@@ -252,8 +253,14 @@ class MyModel(Module):
             losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
             losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])
             losses_dict['wgt_guide'] = nn.KLDivLoss(reduction='sum')(torch.log(x), guide_wgt)
-            losses_dict['cost'] = torch.abs(x - prev_x).sum() * self.cost_rate
-            # losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
+
+            if labels_prev is not None:
+                next_y_prev = torch.exp(labels_prev['logy_for_calc']) - 1.
+                wgt_prev = prev_x * (1+next_y_prev)
+                wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
+                losses_dict['cost'] = torch.abs(x - wgt_prev).sum() * self.cost_rate
+            else:
+                losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
                 losses_dict['entropy'] = -dist.entropy().sum()
