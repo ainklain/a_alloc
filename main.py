@@ -28,7 +28,7 @@ class Configs:
         self.name = name
         self.lr = 5e-4
         self.batch_size = 512
-        self.num_epochs = 5000
+        self.num_epochs = 2000
         self.base_i0 = 2000
         self.mc_samples = 200
         self.sampling_freq = 20
@@ -39,7 +39,7 @@ class Configs:
         self.adaptive_lrx = 2 # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 50
+        self.es_max_count = 20
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
@@ -50,8 +50,9 @@ class Configs:
         self.adv_train = True
         self.n_pretrain = 5
 
-        self.loss_threshold = -10
-        self.adaptive_loss_threshold = -10
+
+        self.loss_threshold = None # -1
+        self.adaptive_loss_threshold = None # -1
 
         self.datatype = 'app'
         # self.datatype = 'inv'
@@ -70,6 +71,12 @@ class Configs:
 
         self.clip = 1.
 
+        self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
+
+        # good balance
+        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.0002,
+        #                       'cost': 2., 'entropy': 0.0001}
         self.init()
         self.set_path()
 
@@ -103,8 +110,6 @@ class Configs:
 
         self.min_eval_loss = 999999
         self.es_count = 0
-        self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05,
         #                           'cost': 1., 'entropy': 0.001}
 
@@ -651,7 +656,7 @@ def train(configs, model, optimizer, sampler, t=None):
                     plt.close(fig)
 
                 # if adaptive_flag and c.es_count >= c.adaptive_count:
-                if adaptive_flag and (losses_eval < loss_threshold or c.es_count >= c.adaptive_count):
+                if adaptive_flag and ((loss_threshold is not None and losses_eval < loss_threshold) or c.es_count >= c.adaptive_count):
                     print('[changed] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
                     adaptive_flag = False
                     loss_threshold = c.adaptive_loss_threshold
@@ -676,7 +681,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                     continue
 
-                if losses_eval < loss_threshold or (c.es_max > 0 and c.es_count >= c.es_max):
+                if (loss_threshold is not None and losses_eval < loss_threshold) or (c.es_max > 0 and c.es_count >= c.es_max):
                     print('[stopped] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
                     break
 
@@ -730,15 +735,21 @@ def main(testmode=False):
 
     base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
                        m=[0.4, 0.15, 0.075, 0.375],
-                       l=[0.25, 0.1, 0.05, 0.6])
+                       l=[0.25, 0.1, 0.05, 0.6],
+                       eq=[0.25, 0.25, 0.25, 0.25])
 
-    for key in ['l','m','h']:
+    for key in ['eq', 'l','m','h',]:
     # configs & variables
-        name = 'apptest_new_7_{}'.format(key)
+        name = 'apptest_new_12_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
+        c.num_epochs = 3000
         c.base_weight = base_weight[key]
 
+        c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
+                              'cost': 1., 'entropy': 0.0001}
+
+        c.es_max_count = -1
         str_ = c.export()
         with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
             f.write(str_)
