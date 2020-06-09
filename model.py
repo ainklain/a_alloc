@@ -52,6 +52,7 @@ class MyModel(Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.dropout_r = c.dropout_r
+        self.max_entropy = c.max_entropy
         self.random_guide_weight = c.random_guide_weight
         self.random_label = c.random_label
 
@@ -143,7 +144,7 @@ class MyModel(Module):
         x = F.relu(x)
         x = self.aa_out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
-        wgt_mu = 0.99 * torch.tanh(wgt_mu) + 1e-6
+        wgt_mu = 0.5 + 0.99 * torch.tanh(wgt_mu) + 1e-6
         wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
 
         # x = F.sigmoid(x) + 0.001
@@ -156,7 +157,13 @@ class MyModel(Module):
 
 
     @profile
-    def forward_with_loss(self, features, labels=None, mc_samples=1000, loss_wgt=None, features_prev=None, labels_prev=None, is_train=True):
+    def forward_with_loss(self, features, labels=None,
+                          mc_samples=1000,
+                          loss_wgt=None,
+                          features_prev=None,
+                          labels_prev=None,
+                          is_train=True,
+                          ):
         """
         t = 2000; mc_samples = 200; is_train = True
         dataset = {'train': None, 'eval': None, 'test': None, 'test_insample': None}
@@ -263,7 +270,10 @@ class MyModel(Module):
                 losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
 
             if loss_wgt is not None:
-                losses_dict['entropy'] = dist.entropy().sum()
+                if self.max_entropy:
+                    losses_dict['entropy'] = -dist.entropy().sum()
+                else:
+                    losses_dict['entropy'] = dist.entropy().sum()
                 # losses_dict['entropy'] = HLoss()(x)
                 i_dict = 0
                 for key in losses_dict.keys():

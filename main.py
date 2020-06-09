@@ -12,6 +12,15 @@ from model import MyModel, load_model, save_model
 from data import get_data, Sampler, to_torch, data_loader
 import torch_utils as tu
 
+# seed
+
+seed = 1234
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 # # #### profiler start ####
 import builtins
 try:
@@ -25,10 +34,16 @@ except AttributeError:
 
 class Configs:
     def __init__(self, name):
+        self.comment = """
+        wgt_mu = 0.5 + 0.99 * torch.tanh(wgt_mu) + 1e-6
+        wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
+        
+        """
+
         self.name = name
         self.lr = 5e-4
         self.batch_size = 512
-        self.num_epochs = 2000
+        self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 200
         self.sampling_freq = 20
@@ -39,7 +54,7 @@ class Configs:
         self.adaptive_lrx = 2 # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 20
+        self.es_max_count = 50
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
@@ -49,10 +64,10 @@ class Configs:
         self.adaptive_flag = True
         self.adv_train = True
         self.n_pretrain = 5
+        self.max_entropy = True
 
-
-        self.loss_threshold = None # -1
-        self.adaptive_loss_threshold = None # -1
+        self.loss_threshold = None  # -1
+        self.adaptive_loss_threshold = None  # -1
 
         self.datatype = 'app'
         # self.datatype = 'inv'
@@ -72,8 +87,10 @@ class Configs:
         self.clip = 1.
 
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.0001}
 
+        # default
+        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
         # good balance
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.0002,
         #                       'cost': 2., 'entropy': 0.0001}
@@ -127,7 +144,8 @@ def calc_y(wgt0, y1, cost_r=0.):
     # wgt0: 0 ~ T-1 ,  y1 : 1 ~ T  => 0 ~ T (0번째 값은 0)
     y = dict()
     wgt1 = wgt0 * (1 + y1)
-    turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]), axis=1), 0)
+    # turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]), axis=1), 0)
+    turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]/wgt1[:-1].sum(axis=1, keepdims=True)), axis=1), 0)
     y['before_cost'] = np.insert(np.sum(wgt1, axis=1) - 1, 0, 0)
     y['after_cost'] = np.insert(np.sum(wgt1, axis=1) - 1 - turnover * cost_r, 0, 0)
 
@@ -136,11 +154,23 @@ def calc_y(wgt0, y1, cost_r=0.):
 
 def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, cost_rate=0.003, suffix='', outpath='./out/', guide_weight=None):
     """
+    t = 3000
+    dataset_cpu, dataset = {}, {}
+    f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
+    dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
+    for key in dataset_cpu.keys():
+        dataset[key] = deepcopy(dataset_cpu[key][0])
+        dataset[key] = tu.to_device(tu.device, to_torch(dataset[key]))
+
+        if key == 'eval':
+            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[c.es_type]
+        else:
+            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[key]
 
     features, labels =  f_dict['test_insample'], l_dict['test_insample']
     mc_samples=c.mc_samples
     k_days=c.k_days
-    outpath=outpath_t
+    # outpath=outpath_t
     cost_rate=c.cost_rate
     guide_weight=c.base_weight
     """
@@ -229,16 +259,27 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
     wgt_result_calc = wgt_result[::k_days, :]
     wgt_label_calc = wgt_label[::k_days, :]
 
+    # constraint
+    const_wgt = (wgt_result_calc >= np.array(guide_weight) / 2)
+    const_multiplier = (1 - (np.array(guide_weight) / 2 * ~const_wgt).sum(axis=1, keepdims=True)) / (wgt_result_calc * const_wgt).sum(axis=1, keepdims=True)
+    wgt_result_const_calc = wgt_result_calc * const_wgt * const_multiplier + np.array(guide_weight) / 2 * ~const_wgt
+
     # features, labels = test_features, test_labels; wgt = wgt_result
     # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
     active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
 
     y_base = np.insert(np.sum((1+y_next) * wgt_base_calc, axis=1), 0, 1.)
     y_port = np.insert(np.sum((1+y_next) * wgt_result_calc, axis=1), 0, 1.)
+    y_port_const = np.insert(np.sum((1+y_next) * wgt_result_const_calc, axis=1), 0, 1.)
     y_label = np.insert(np.sum((1+y_next) * wgt_label_calc, axis=1), 0, 1.)
     y_eq = np.insert(np.mean(1+y_next, axis=1), 0, 1.)
 
-
+    y_base_with_c, turnover_base = calc_y(wgt_base_calc, y_next, cost_rate)
+    y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
+    y_port_const_with_c, turnover_port_const = calc_y(wgt_result_const_calc, y_next, cost_rate)
+    y_label_with_c, turnover_label = calc_y(wgt_label_calc, y_next, cost_rate)
+    y_guide_with_c, turnover_guide = calc_y(np.array(guide_weight)[np.newaxis, :].repeat(len(wgt_result_calc), axis=0),
+                                            y_next, cost_rate)
 
     if guide_weight is not None:
         y_guide = np.insert(np.sum((1+y_next) * np.array(guide_weight), axis=1), 0, 1.)
@@ -246,7 +287,6 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
         y_guide = y_eq
 
     x = np.arange(len(y_base))
-
 
     # save data
     if guide_date is not None:
@@ -256,21 +296,17 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
         date_selected = list(date_)[::k_days]
         # date_base.append(sampler.add_infos['date'][t])
 
-        y_base_with_c, turnover_base = calc_y(wgt_base_calc, y_next, cost_rate)
-        y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
-        y_label_with_c, turnover_label = calc_y(wgt_label_calc, y_next, cost_rate)
-
         idx_list = sampler.add_infos['idx_list']
-        columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']
-        df = pd.DataFrame(data=np.concatenate([wgt_result_calc, y_next,
-                        y_port_with_c['before_cost'][1:, np.newaxis], y_label_with_c['before_cost'][1:, np.newaxis],
-                        y_port_with_c['after_cost'][1:, np.newaxis], y_label_with_c['after_cost'][1:, np.newaxis]
+        columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_wgt_const' for idx_nm in idx_list] + [idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']
+        df = pd.DataFrame(data=np.concatenate([wgt_result_calc, wgt_result_const_calc, y_next,
+                        y_port_with_c['before_cost'][1:, np.newaxis], y_port_const_with_c['before_cost'][1:, np.newaxis], y_label_with_c['before_cost'][1:, np.newaxis],
+                        y_port_with_c['after_cost'][1:, np.newaxis], y_port_const_with_c['after_cost'][1:, np.newaxis], y_label_with_c['after_cost'][1:, np.newaxis]
                         ], axis=-1),
                           index=date_selected
                           , columns=columns)
 
-        df_all = df.loc[:, ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']]
-        df_test = df.loc[date_test_selected, ['port_bc', 'guide_bc', 'port_ac', 'guide_ac']]
+        df_all = df.loc[:, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
+        df_test = df.loc[date_test_selected, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
         df_stats = pd.concat({'mu_all': df_all.mean() * 12,
                            'sig_all': df_all.std(ddof=1) * np.sqrt(12),
                            'sr_all': df_all.mean() / df_all.std(ddof=1) * np.sqrt(12),
@@ -289,14 +325,19 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
     ax1 = fig.add_subplot(211)
     # ax = plt.gca()
     l_port, = ax1.plot(x, y_port.cumprod())
+    l_port_const, = ax1.plot(x, y_port_const.cumprod())
     l_eq, = ax1.plot(x, y_eq.cumprod())
     l_guide, = ax1.plot(x, y_guide.cumprod())
-    ax1.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
+    ax1.legend(handles=(l_port, l_port_const, l_eq, l_guide), labels=('port', 'port_const', 'eq', 'guide'))
 
     ax2 = fig.add_subplot(212)
     l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
+    l_portconst_guide, = ax2.plot(x, (1 + y_port_const - y_guide).cumprod() - 1.)
     l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
-    ax2.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
+    l_port_guide_ac, = ax2.plot(x, (1 + y_port_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
+    l_portconst_guide_ac, = ax2.plot(x, (1 + y_port_const_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
+    ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
+               labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
 
     if insample_boundary is not None:
         ax1.axvline(insample_boundary[0] / k_days)
@@ -455,7 +496,7 @@ def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
 def backtest(configs, sampler):
     c = configs
 
-    wgt_base = np.zeros([sampler.max_len - c.base_i0 - 1, sampler.n_labels])
+    wgt_base = np.zeros([sampler.max_len - c.base_i0, sampler.n_labels])
     wgt_result = np.zeros_like(wgt_base)
 
     # 20 days
@@ -615,7 +656,7 @@ def train(configs, model, optimizer, sampler, t=None):
                         c.min_eval_loss = losses_eval
                         c.es_count = 0
 
-                str_ = ""
+                str_ = "(es_count:{} / min_loss:{}) ".format(c.es_count, c.min_eval_loss)
                 for key in losses_eval_dict.keys():
                     str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * c.loss_wgt[key]))
 
@@ -738,18 +779,19 @@ def main(testmode=False):
                        l=[0.25, 0.1, 0.05, 0.6],
                        eq=[0.25, 0.25, 0.25, 0.25])
 
-    for key in ['eq', 'l','m','h',]:
+    for key in [ 'l','m','h','eq',]:
     # configs & variables
-        name = 'apptest_new_12_{}'.format(key)
+        name = 'apptest_new_17_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
-        c.num_epochs = 3000
         c.base_weight = base_weight[key]
 
-        c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
-                              'cost': 1., 'entropy': 0.0001}
+        # c.num_epochs = 3000
+        #
+        # c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
+        #                       'cost': 1., 'entropy': 0.0001}
 
-        c.es_max_count = -1
+        # c.es_max_count = -1
         str_ = c.export()
         with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
             f.write(str_)
