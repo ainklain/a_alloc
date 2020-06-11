@@ -141,7 +141,7 @@ def get_data(configs):
     merged = pd.merge(macro_data, idx_data, left_index=True, right_index=True)
     macro = merged.to_numpy()[:, :len(macro_data.columns)]
     idx = merged.to_numpy()[:, len(macro_data.columns):]
-    
+
     # macro features
     n_point, n_macro = macro.shape
     macro_features = np.zeros([n_point, n_macro])

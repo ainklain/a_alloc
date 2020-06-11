@@ -50,11 +50,11 @@ class Configs:
         self.k_days = 20
         self.label_days = 20
         self.strategy_days = 250
-        self.adaptive_count = 5
-        self.adaptive_lrx = 2  # learning rate * 배수
+        self.adaptive_count = -1
+        self.adaptive_lrx = 5  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 100
+        self.es_max_count = 10
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
@@ -79,10 +79,10 @@ class Configs:
         self.model_init_everytime = False
 
         self.hidden_dim = [72, 48, 32]
-        self.dropout_r = 0.3
+        self.dropout_r = 0.7
 
-        self.random_guide_weight = 0.1
-        self.random_label = 0.1  # flip sign
+        self.random_guide_weight = 0.0
+        self.random_label = 0.0  # flip sign
 
         self.clip = 1.
 
@@ -152,22 +152,23 @@ def calc_y(wgt0, y1, cost_r=0.):
     return y, turnover
 
 
-def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, cost_rate=0.003, suffix='', outpath='./out/', guide_weight=None):
+def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, cost_rate=0.003, suffix='', outpath='./out/', guide_weight=None):
     """
     t = 3000
-    dataset_cpu, dataset = {}, {}
+    dataset_cpu, dataset_ = {}, {}
     f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
     dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
     for key in dataset_cpu.keys():
-        dataset[key] = deepcopy(dataset_cpu[key][0])
-        dataset[key] = tu.to_device(tu.device, to_torch(dataset[key]))
+        dataset_[key] = deepcopy(dataset_cpu[key][0])
+        dataset_[key] = tu.to_device(tu.device, to_torch(dataset_[key]))
 
         if key == 'eval':
-            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[c.es_type]
+            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset_[c.es_type]
         else:
-            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[key]
+            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset_[key]
 
     features, labels =  f_dict['test_insample'], l_dict['test_insample']
+    dataset = dataset_['test_insample']
     mc_samples=c.mc_samples
     k_days=c.k_days
     # outpath=outpath_t
@@ -178,9 +179,12 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
     # ep=0; n_samples = 100; k_days = 20; model, features, labels, insample_boundary = main(testmode=True)
     # features, labels = test_features, test_labels
     # features, labels = test_insample_features, test_insamples_labels
-
+    features_prev, labels_prev, features, labels = dataset
     with torch.set_grad_enabled(False):
-        wgt_test, losses_test, pred_mu_test, pred_sigma_test, _ = model.forward_with_loss(features, None, mc_samples=mc_samples, is_train=False)
+        wgt_test, losses_test, pred_mu_test, pred_sigma_test, _ = model.forward_with_loss(features, None, mc_samples=mc_samples,
+                                                                                          features_prev=features_prev,
+                                                                                          labels_prev=labels_prev,
+                                                                                          is_train=False)
 
     wgt_base = tu.np_ify(features['wgt'])
     wgt_label = tu.np_ify(labels['wgt'])
@@ -250,7 +254,7 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
 
-    fig.savefig(os.path.join(outpath, 'test_wgt_{}{}.png'.format(ep, suffix)))
+    fig.savefig(os.path.join(outpath, '{}_test_wgt_{}.png'.format(ep, suffix)))
     plt.close(fig)
 
     # #######################
@@ -315,9 +319,9 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
                            'sr_test': df_test.mean() / df_test.std(ddof=1) * np.sqrt(12)},
                           axis=1)
 
-        print(df_stats)
-        df.to_csv(os.path.join(outpath, 'all_data.csv'))
-        df_stats.to_csv(os.path.join(outpath, 'stats.csv'))
+        print(ep, suffix, '\n', df_stats)
+        df.to_csv(os.path.join(outpath, '{}_all_data_{}.csv'.format(ep, suffix)))
+        df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
 
     # ################ together
 
@@ -362,7 +366,7 @@ def plot_each(ep, sampler, model, features, labels, insample_boundary=None, guid
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
 
-    fig.savefig(os.path.join(outpath, 'test_y_{}{}.png'.format(ep, suffix)))
+    fig.savefig(os.path.join(outpath, '{}_test_y_{}.png'.format(ep, suffix)))
     plt.close(fig)
 
 
@@ -671,7 +675,7 @@ def train(configs, model, optimizer, sampler, t=None):
                 save_model(outpath_t, ep, model, optimizer)
                 suffix = "_e[{:2.2f}]test[{:2.2f}]".format(losses_eval, losses_test)
                 if ep % (c.plot_freq * c.eval_freq) == 0:
-                    plot_each(ep, sampler, model, f_dict['test_insample'], l_dict['test_insample']
+                    plot_each(ep, sampler, model, dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
                               , insample_boundary=insample_boundary
                               , guide_date=guide_date
                               , mc_samples=c.mc_samples
@@ -756,14 +760,14 @@ def train(configs, model, optimizer, sampler, t=None):
                 print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_dict['train'][ep], losses_eval, str_))
 
         model.load_from_optim()
-        plot_each(c.num_epochs + 20000, sampler, model, f_dict['test_insample'], l_dict['test_insample']
+        plot_each(c.num_epochs + 20000, sampler, model,  dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
                   , insample_boundary=insample_boundary, guide_date=guide_date
                   , mc_samples=c.mc_samples, k_days=c.k_days
                   , cost_rate=c.cost_rate
                   , suffix=suffix + "_{}".format(t), outpath=outpath_t
                   , guide_weight=c.base_weight)
 
-        plot_each(c.num_epochs + 20000, sampler, model, f_dict['test'], l_dict['test']
+        plot_each(c.num_epochs + 20000, sampler, model,  dataset['test'] #  f_dict['test'], l_dict['test']
                   , mc_samples=c.mc_samples, k_days=c.k_days
                   , cost_rate=c.cost_rate
                   , suffix=suffix + "_{}_test".format(t), outpath=outpath_t
@@ -779,10 +783,10 @@ def main(testmode=False):
                        l=[0.25, 0.1, 0.05, 0.6],
                        eq=[0.25, 0.25, 0.25, 0.25])
 
-    for key in [ 'l','m','h','eq',]:
-    # for key in ['h']:
+    # for key in [ 'l','m','h','eq',]:
+    for key in ['h']:
     # configs & variables
-        name = 'apptest_new_23_{}'.format(key)
+        name = 'apptest_new_25_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
         c.base_weight = base_weight[key]
@@ -808,7 +812,7 @@ def main(testmode=False):
         model.train()
         model.to(tu.device)
 
-        train(c, model, optimizer, sampler, )
+        train(c, model, optimizer, sampler, 3000)
         # train(c, model, optimizer, sampler, t=1700)
 
         backtest(c, sampler)

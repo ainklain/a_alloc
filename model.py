@@ -48,9 +48,10 @@ class MyModel(Module):
     def __init__(self, in_dim, out_dim, configs,):
         super(MyModel, self).__init__()
         c = configs
-        self.cost_rate = c.cost_rate
         self.in_dim = in_dim
         self.out_dim = out_dim
+        self.c = c
+        self.cost_rate = c.cost_rate
         self.dropout_r = c.dropout_r
         self.max_entropy = c.max_entropy
         self.random_guide_weight = c.random_guide_weight
@@ -61,10 +62,12 @@ class MyModel(Module):
         else:
             self.guide_weight = torch.ones(1, out_dim, dtype=torch.float32) / out_dim
         self.hidden_layers = nn.ModuleList()
+        self.hidden_bn = nn.ModuleList()
 
         h_in = in_dim
         for h_out in c.hidden_dim:
             self.hidden_layers.append(XLinear(h_in, h_out))
+            self.hidden_bn.append(nn.BatchNorm1d(h_out))
             h_in = h_out
 
         self.out_layer = XLinear(h_out, out_dim)
@@ -72,6 +75,9 @@ class MyModel(Module):
         # asset allocation
         self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim)//2)
         self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim * 2)
+        self.aa_bn = nn.BatchNorm1d((out_dim * 3 + in_dim)//2)
+        self.aa_bn2 = nn.BatchNorm1d(out_dim * 2)
+
         self.aa_out_layer = XLinear(out_dim * 2, out_dim * 2)
 
         self.loss_func_logy = nn.MSELoss()
@@ -82,10 +88,15 @@ class MyModel(Module):
     #     return torch.ones_like()
 
     def forward(self, x, sample=True):
+        """
+        x = torch.randn(200, 512, 30).cuda()
+        """
         mask = self.training or sample
-
-        for h_layer in self.hidden_layers:
+        n_samples, batch_size, _ = x.shape
+        for h_layer, bn in zip(self.hidden_layers, self.hidden_bn):
             x = h_layer(x)
+
+            # x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
             x = F.leaky_relu(x)
             x = F.dropout(x, p=self.dropout_r, training=mask)
 
@@ -94,6 +105,9 @@ class MyModel(Module):
         return x
 
     def sample_predict(self, x, mc_samples):
+        """
+        x = torch.randn(512, 30)
+        """
         self.train()
         # Just copies type from x, initializes new vector
         # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
@@ -131,6 +145,9 @@ class MyModel(Module):
         return features_perturbed
 
     def run(self, features, wgt, mc_samples):
+        """
+        wgt = features['wgt']
+        """
         x = torch.cat([features['idx'], features['macro']], dim=-1)
         pred = self.sample_predict(x, mc_samples=mc_samples)
         pred_mu = torch.mean(pred, dim=0)
@@ -139,8 +156,10 @@ class MyModel(Module):
 
         x = torch.cat([pred_mu, pred_sigma, wgt, x], dim=-1)
         x = self.aa_hidden_layer(x)
+        # x = self.aa_bn(x)
         x = F.relu(x)
         x = self.aa_hidden_layer2(x)
+        # x = self.aa_bn2(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
@@ -153,8 +172,6 @@ class MyModel(Module):
         # return x, pred_mu, pred_sigma
 
         return wgt_mu, wgt_sigma, pred_mu, pred_sigma
-
-
 
     @profile
     def forward_with_loss(self, features, labels=None,
@@ -201,6 +218,8 @@ class MyModel(Module):
         # x = F.sigmoid(x) + 0.001
         # x = x / x.sum(dim=1, keepdim=True)
 
+        c = self.c
+
         with torch.set_grad_enabled(False):
             if is_train:
                 if np.random.rand() > self.random_guide_weight:
@@ -223,6 +242,12 @@ class MyModel(Module):
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
         wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, prev_x, mc_samples)
         wgt_mu = (1. + wgt_mu) * guide_wgt
+
+        # cash 제한 풀기
+        noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
+        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True), torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
+        wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
+
         wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
         dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
         if is_train:
