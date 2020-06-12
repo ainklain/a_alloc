@@ -37,12 +37,11 @@ class Configs:
         self.comment = """
         wgt_mu = 0.5 + 0.99 * torch.tanh(wgt_mu) + 1e-6
         wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
-        
         """
 
         self.name = name
         self.lr = 5e-4
-        self.batch_size = 512
+        self.batch_size = 128
         self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 200
@@ -50,17 +49,17 @@ class Configs:
         self.k_days = 20
         self.label_days = 20
         self.strategy_days = 250
-        self.adaptive_count = -1
-        self.adaptive_lrx = 5  # learning rate * 배수
+        self.adaptive_count = 5
+        self.adaptive_lrx = 2  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 10
+        self.es_max_count = -1
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
-        self.use_accum_data = True # [sampler] 데이터 누적할지 말지
+        self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.adv_train = True
         self.n_pretrain = 5
@@ -79,10 +78,10 @@ class Configs:
         self.model_init_everytime = False
 
         self.hidden_dim = [72, 48, 32]
-        self.dropout_r = 0.7
+        self.dropout_r = 0.3
 
         self.random_guide_weight = 0.0
-        self.random_label = 0.0  # flip sign
+        self.random_label = 0.01  # flip sign
 
         self.clip = 1.
 
@@ -181,6 +180,7 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
     # features, labels = test_insample_features, test_insamples_labels
     features_prev, labels_prev, features, labels = dataset
     with torch.set_grad_enabled(False):
+        model.eval()
         wgt_test, losses_test, pred_mu_test, pred_sigma_test, _ = model.forward_with_loss(features, None, mc_samples=mc_samples,
                                                                                           features_prev=features_prev,
                                                                                           labels_prev=labels_prev,
@@ -641,6 +641,7 @@ def train(configs, model, optimizer, sampler, t=None):
             # if ep > 0:
             #     print(losses_train_np, losses_eval, losses_test)
             if ep % c.eval_freq == 0:
+                model.eval()
                 with torch.set_grad_enabled(False):
                     _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(f_dict['eval'], l_dict['eval']
                                                                                      , mc_samples=c.mc_samples
@@ -682,6 +683,14 @@ def train(configs, model, optimizer, sampler, t=None):
                               , k_days=c.k_days
                               , cost_rate=c.cost_rate
                               , suffix=suffix
+                              , outpath=outpath_t
+                              , guide_weight=c.base_weight)
+
+                    plot_each(ep, sampler, model, dataset['test']  # f_dict['test_insample'], l_dict['test_insample']
+                              , mc_samples=c.mc_samples
+                              , k_days=c.k_days
+                              , cost_rate=c.cost_rate
+                              , suffix=suffix + "_{}_test".format(t)
                               , outpath=outpath_t
                               , guide_weight=c.base_weight)
 
@@ -730,6 +739,7 @@ def train(configs, model, optimizer, sampler, t=None):
                     print('[stopped] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
                     break
 
+            model.train()
             train_dataloader = data_loader(dataset_cpu['train'], batch_size=c.batch_size)
             for i_loop, (train_f_prev, train_l_prev, train_f, train_l) in enumerate(train_dataloader):
                 """
@@ -759,6 +769,7 @@ def train(configs, model, optimizer, sampler, t=None):
             if ep % c.eval_freq == 0:
                 print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_dict['train'][ep], losses_eval, str_))
 
+        model.eval()
         model.load_from_optim()
         plot_each(c.num_epochs + 20000, sampler, model,  dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
                   , insample_boundary=insample_boundary, guide_date=guide_date
@@ -786,7 +797,7 @@ def main(testmode=False):
     # for key in [ 'l','m','h','eq',]:
     for key in ['h']:
     # configs & variables
-        name = 'apptest_new_25_{}'.format(key)
+        name = 'apptest_new_26_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
         c.base_weight = base_weight[key]

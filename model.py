@@ -96,7 +96,7 @@ class MyModel(Module):
         for h_layer, bn in zip(self.hidden_layers, self.hidden_bn):
             x = h_layer(x)
 
-            # x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
+            x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
             x = F.leaky_relu(x)
             x = F.dropout(x, p=self.dropout_r, training=mask)
 
@@ -108,7 +108,7 @@ class MyModel(Module):
         """
         x = torch.randn(512, 30)
         """
-        self.train()
+        # self.train()
         # Just copies type from x, initializes new vector
         # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
         #
@@ -156,10 +156,10 @@ class MyModel(Module):
 
         x = torch.cat([pred_mu, pred_sigma, wgt, x], dim=-1)
         x = self.aa_hidden_layer(x)
-        # x = self.aa_bn(x)
+        x = self.aa_bn(x)
         x = F.relu(x)
         x = self.aa_hidden_layer2(x)
-        # x = self.aa_bn2(x)
+        x = self.aa_bn2(x)
         x = F.relu(x)
         x = self.aa_out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
