@@ -273,8 +273,12 @@ class MyModel(Module):
 
             with torch.set_grad_enabled(False):
                 if is_train:
-                    mask = torch.empty_like(labels['logy_for_calc']).to(tu.device).uniform_() < self.random_label
-                    next_y[mask] = -next_y[mask]
+                    random_setting = torch.empty_like(labels['logy_for_calc']).to(tu.device).uniform_()
+                    flip_mask = random_setting < self.random_label
+                    next_y[flip_mask] = -next_y[flip_mask]
+
+                    sampling_mask = (random_setting >= self.random_label) & (random_setting < self.random_label * 2)
+                    next_y[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(labels['logy_for_calc']) * labels['sig_for_calc'])[sampling_mask]
 
             losses_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()

@@ -41,7 +41,7 @@ class Configs:
 
         self.name = name
         self.lr = 5e-4
-        self.batch_size = 128
+        self.batch_size = 512
         self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 200
@@ -53,7 +53,7 @@ class Configs:
         self.adaptive_lrx = 2  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = -1
+        self.es_max_count = 50
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
@@ -80,13 +80,14 @@ class Configs:
         self.hidden_dim = [72, 48, 32]
         self.dropout_r = 0.3
 
-        self.random_guide_weight = 0.0
-        self.random_label = 0.01  # flip sign
+        self.random_guide_weight = 0.1
+        self.random_label = 0.1  # flip sign
 
         self.clip = 1.
 
         self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0, 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
@@ -337,11 +338,13 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
     ax2 = fig.add_subplot(212)
     l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
     l_portconst_guide, = ax2.plot(x, (1 + y_port_const - y_guide).cumprod() - 1.)
-    l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
+    # l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
     l_port_guide_ac, = ax2.plot(x, (1 + y_port_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
     l_portconst_guide_ac, = ax2.plot(x, (1 + y_port_const_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
-    ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
-               labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
+    ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_guide_ac, l_portconst_guide_ac),
+               labels=('port-guide', 'portconst-guide', 'port-guide(ac)', 'portconst-guide(ac)'))
+    # ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
+    #            labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
 
     if insample_boundary is not None:
         ax1.axvline(insample_boundary[0] / k_days)
@@ -674,7 +677,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 losses_dict['test'][ep] = float(losses_test)
                 save_model(outpath_t, ep, model, optimizer)
-                suffix = "_e[{:2.2f}]test[{:2.2f}]".format(losses_eval, losses_test)
+                suffix = "_e[{:2.2f}]test[{:2.2f}]_es[{}]".format(losses_eval, losses_test, c.es_count)
                 if ep % (c.plot_freq * c.eval_freq) == 0:
                     plot_each(ep, sampler, model, dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
                               , insample_boundary=insample_boundary
@@ -789,15 +792,21 @@ testmode = False
 @profile
 def main(testmode=False):
 
+    # 실제
     base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-                       m=[0.4, 0.15, 0.075, 0.375],
-                       l=[0.25, 0.1, 0.05, 0.6],
+                       m=[0.45, 0.15, 0.075, 0.325],
+                       l=[0.30, 0.1, 0.05, 0.55],
                        eq=[0.25, 0.25, 0.25, 0.25])
+    # 검증
+    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
+    #                    m=[0.4, 0.15, 0.075, 0.375],
+    #                    l=[0.25, 0.1, 0.05, 0.6],
+    #                    eq=[0.25, 0.25, 0.25, 0.25])
 
-    # for key in [ 'l','m','h','eq',]:
+    # for key in ['h','l','m','eq',]:
     for key in ['h']:
     # configs & variables
-        name = 'apptest_new_26_{}'.format(key)
+        name = 'data0615_newlabel02_{}'.format(key)
         # name = 'app_adv_1'
         c = Configs(name)
         c.base_weight = base_weight[key]
@@ -818,12 +827,12 @@ def main(testmode=False):
 
         # model & optimizer
         model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
-        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.1)
+        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
         load_model(c.outpath, model, optimizer)
         model.train()
         model.to(tu.device)
 
-        train(c, model, optimizer, sampler, 3000)
+        train(c, model, optimizer, sampler, 3489)
         # train(c, model, optimizer, sampler, t=1700)
 
         backtest(c, sampler)
