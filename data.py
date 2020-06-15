@@ -127,11 +127,15 @@ def get_data(configs):
     delete_nan = 500
 
     # get data
-    macro_data = pd.read_csv('./data/macro_data.txt', index_col=0, sep='\t')
-    macro_data['copper_gold_r'] = macro_data['HG1 Comdty'] / macro_data['GC1 Comdty']
+    macro_data = pd.read_csv('./data/macro_data_20200615.txt', index_col=0, sep='\t')
+    macro_data.columns = [col.lower() for col in macro_data.columns]
+    macro_data['copper_gold_r'] = macro_data['hg1 comdty'] / macro_data['gc1 comdty']
+    macro_data['spx_dj'] = macro_data['spx index'] / macro_data['indu index']
+    macro_data['spx_rs'] = macro_data['spx index'] / macro_data['rty index']
 
     if c.datatype == 'app':
-        idx_data = pd.read_csv('./data/app_data.txt', index_col=0, sep='\t')
+        idx_data = pd.read_csv('./data/app_data_20200615.txt', index_col=0, sep='\t')
+        idx_data.columns = [col.lower() for col in idx_data.columns]
     else:
         idx_data = pd.read_csv('./data/index_data.txt', index_col=0, sep='\t')
 
@@ -149,7 +153,7 @@ def get_data(configs):
         macro_features[t] = arr_to_normal_ts(macro[(t-c.normalizing_window+1):(t+1)])[-1]
 
     # idx features
-    idx_logp = np.log(idx)
+    idx_logp = np.log(idx + 1e-6)
     n_point, n_asset = idx_logp.shape
 
     idx_features = np.zeros([n_point, n_asset * len(calc_days)])
@@ -169,7 +173,22 @@ def get_data(configs):
     labels_dict['wgt'] = wgt_features[(c.k_days + 1):][delete_nan:]
     labels_dict['wgt'] = np.r_[labels_dict['wgt'], np.repeat(labels_dict['wgt'][-1:], c.k_days, axis=0)]
     # labels_dict['wgt'] = strategy_based_label(idx_logp, label_days)[(label_days+1):][delete_nan:]
-    labels_dict['logy_for_calc'] = log_y_nd(idx_logp, c.k_days, label=True)[(c.k_days+1):][delete_nan:]
+    logy_for_calc = log_y_nd(idx_logp, c.k_days, label=True)
+    labels_dict['logy_for_calc'] = logy_for_calc[(c.k_days+1):][delete_nan:]
+
+    logy_1d = log_y_nd(idx_logp, 1, label=True)
+    mu_for_calc = np.zeros_like(logy_for_calc)
+    sig_for_calc = np.zeros_like(logy_for_calc)
+    for i in range(1, len(logy_for_calc)-1):
+        data_i = logy_1d[:(i + 1)][-250:]
+        m_1d = data_i.mean(axis=0)
+        s_1d = data_i.std(axis=0, ddof=1)
+        mu_for_calc[i, :] = m_1d * c.k_days
+        sig_for_calc[i, :] = s_1d * np.sqrt(c.k_days)
+
+    labels_dict['mu_for_calc'] = mu_for_calc[(c.k_days+1):][delete_nan:]
+    labels_dict['sig_for_calc'] = sig_for_calc[(c.k_days + 1):][delete_nan:]
+
 
     # features and labels
     features_dict = dict()
