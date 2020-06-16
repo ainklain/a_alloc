@@ -176,6 +176,7 @@ def get_data(configs):
     logy_for_calc = log_y_nd(idx_logp, c.k_days, label=True)
     labels_dict['logy_for_calc'] = logy_for_calc[(c.k_days+1):][delete_nan:]
 
+    # y_1d = np.exp(log_y_nd(idx_logp, 1, label=True)) - 1.
     logy_1d = log_y_nd(idx_logp, 1, label=True)
     mu_for_calc = np.zeros_like(logy_for_calc)
     sig_for_calc = np.zeros_like(logy_for_calc)
@@ -276,7 +277,7 @@ class Sampler:
         test_end_i = min(i + self.test_days, self.max_len)
 
         train_idx = np.random.choice(np.arange(train_start_i, train_end_i), train_end_i-train_start_i-1, replace=False)
-        f_train_prev = dict([(key, self.features[key][train_idx-self.k_days-1]) for key in self.features.keys()])
+        f_train_prev = dict([(key, self.features[key][train_idx - self.k_days - 1]) for key in self.features.keys()])
         l_train_prev = dict([(key, self.labels[key][train_idx-self.k_days-1]) for key in self.labels.keys()])
         f_train = dict([(key, self.features[key][train_idx]) for key in self.features.keys()])
         l_train = dict([(key, self.labels[key][train_idx]) for key in self.labels.keys()])
