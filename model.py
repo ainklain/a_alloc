@@ -240,6 +240,7 @@ class MyModel(Module):
             prev_x = features['wgt']
 
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
+        # wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, guide_wgt, mc_samples)
         wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, prev_x, mc_samples)
         wgt_mu = (1. + wgt_mu) * guide_wgt
 
@@ -269,16 +270,21 @@ class MyModel(Module):
         # guide_wgt = guide_wgt.to(x.device)
 
         if labels is not None:
-            next_y = torch.exp(labels['logy_for_calc']) - 1.
 
             with torch.set_grad_enabled(False):
+                next_logy = torch.empty_like(labels['logy_for_calc']).to(tu.device)
+                next_logy.copy_(labels['logy_for_calc'])
+                # next_logy = torch.exp(next_logy) - 1.
                 if is_train:
-                    random_setting = torch.empty_like(labels['logy_for_calc']).to(tu.device).uniform_()
+                    random_setting = torch.empty_like(next_logy).to(tu.device).uniform_()
                     flip_mask = random_setting < self.random_label
-                    next_y[flip_mask] = -next_y[flip_mask]
+                    next_logy[flip_mask] = -next_logy[flip_mask]
 
                     sampling_mask = (random_setting >= self.random_label) & (random_setting < self.random_label * 2)
-                    next_y[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(labels['logy_for_calc']) * labels['sig_for_calc'])[sampling_mask]
+                    next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
+
+                # next_y = next_logy
+                next_y = torch.exp(next_logy) - 1.
 
             losses_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
