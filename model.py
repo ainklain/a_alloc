@@ -51,11 +51,6 @@ class MyModel(Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.c = c
-        self.cost_rate = c.cost_rate
-        self.dropout_r = c.dropout_r
-        self.max_entropy = c.max_entropy
-        self.random_guide_weight = c.random_guide_weight
-        self.random_label = c.random_label
 
         if c.base_weight is not None:
             self.guide_weight = torch.FloatTensor([c.base_weight])
@@ -91,6 +86,7 @@ class MyModel(Module):
         """
         x = torch.randn(200, 512, 30).cuda()
         """
+        c = self.c
         mask = self.training or sample
         n_samples, batch_size, _ = x.shape
         for h_layer, bn in zip(self.hidden_layers, self.hidden_bn):
@@ -98,7 +94,7 @@ class MyModel(Module):
 
             x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
             x = F.leaky_relu(x)
-            x = F.dropout(x, p=self.dropout_r, training=mask)
+            x = F.dropout(x, p=c.dropout_r, training=mask)
 
         x = self.out_layer(x)
         # print([p.grad for p in list(self.out_layer.parameters()) if p.grad is not None])
@@ -222,7 +218,7 @@ class MyModel(Module):
 
         with torch.set_grad_enabled(False):
             if is_train:
-                if np.random.rand() > self.random_guide_weight:
+                if np.random.rand() > c.random_guide_weight:
                     guide_wgt = self.guide_weight.repeat(len(features['wgt']), 1).to(features['wgt'].device)
                 else:
                     guide_wgt = torch.rand_like(features['wgt']).to(features['wgt'].device)
@@ -240,8 +236,11 @@ class MyModel(Module):
             prev_x = features['wgt']
 
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
-        # wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, guide_wgt, mc_samples)
-        wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, prev_x, mc_samples)
+        if c.use_guide_wgt_as_prev_x is True:
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, guide_wgt, mc_samples)
+        else:
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.run(features, prev_x, mc_samples)
+
         wgt_mu = (1. + wgt_mu) * guide_wgt
 
         # cash 제한 풀기
@@ -277,10 +276,10 @@ class MyModel(Module):
                 # next_logy = torch.exp(next_logy) - 1.
                 if is_train:
                     random_setting = torch.empty_like(next_logy).to(tu.device).uniform_()
-                    flip_mask = random_setting < self.random_label
+                    flip_mask = random_setting < c.random_flip
                     next_logy[flip_mask] = -next_logy[flip_mask]
 
-                    sampling_mask = (random_setting >= self.random_label) & (random_setting < self.random_label * 2)
+                    sampling_mask = (random_setting >= c.random_flip) & (random_setting < (c.random_flip+c.random_label))
                     next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
 
                 # next_y = next_logy
@@ -300,12 +299,12 @@ class MyModel(Module):
                 next_y_prev = torch.exp(labels_prev['logy_for_calc']) - 1.
                 wgt_prev = prev_x * (1+next_y_prev)
                 wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
-                losses_dict['cost'] = torch.abs(x - wgt_prev).sum() * self.cost_rate
+                losses_dict['cost'] = torch.abs(x - wgt_prev).sum() * c.cost_rate
             else:
-                losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * self.cost_rate
+                losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * c.cost_rate
 
             if loss_wgt is not None:
-                if self.max_entropy:
+                if c.max_entropy:
                     losses_dict['entropy'] = -dist.entropy().sum()
                 else:
                     losses_dict['entropy'] = dist.entropy().sum()
