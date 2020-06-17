@@ -12,15 +12,6 @@ from model import MyModel, load_model, save_model
 from data import get_data, Sampler, to_torch, data_loader
 import torch_utils as tu
 
-# seed
-
-seed = 100
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
 # # #### profiler start ####
 import builtins
 try:
@@ -32,6 +23,20 @@ except AttributeError:
 # # #### profiler end ####
 
 
+def memo():
+    """
+
+    self.adaptive_flag = False
+    l:
+    self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 2., 'entropy': 0.}
+    seed = 100
+    self.use_guide_wgt_as_prev_x = False
+     self.random_label = 0.1
+
+
+    """
+    pass
+
 class Configs:
     def __init__(self, name):
         self.comment = """
@@ -39,6 +44,7 @@ class Configs:
         wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
         """
 
+        self.seed = 1000
         self.name = name
         self.lr = 5e-4
         self.batch_size = 512
@@ -76,17 +82,20 @@ class Configs:
         self.eval_freq = 1 # 20
         self.save_freq = 20
         self.model_init_everytime = False
+        self.use_guide_wgt_as_prev_x = True  # model / forward_with_loss
 
         self.hidden_dim = [72, 48, 32]
         self.dropout_r = 0.3
 
         self.random_guide_weight = 0.1
-        self.random_label = 0.1  # flip sign
+        self.random_flip = 0.1  # flip sign
+        self.random_label = 0.1  # random sample from dist.
 
         self.clip = 1.
 
-        self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0, 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+        # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
+        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -831,38 +840,46 @@ def main(testmode=False):
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
     # for key in ['l','m','h','eq',]:
-    for key in ['l']:
-    # configs & variables
-        name = 'data0615_newlabel07_{}'.format(key)
-        # name = 'app_adv_1'
-        c = Configs(name)
-        c.base_weight = base_weight[key]
+    for key in ['m']:
+        for seed in [100, 1000, 123]:
+            # configs & variables
+            name = 'data0615_newlabel_seed03_{}'.format(key)
+            # name = 'app_adv_1'
+            c = Configs(name)
+            c.base_weight = base_weight[key]
+            c.seed = seed
+            # seed
+            random.seed(c.seed)
+            np.random.seed(c.seed)
+            torch.manual_seed(c.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         # c.num_epochs = 3000
-        #
-        # c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
-        #                       'cost': 1., 'entropy': 0.0001}
+            #
+            # c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
+            #                       'cost': 1., 'entropy': 0.0001}
 
-        # c.es_max_count = -1
-        str_ = c.export()
-        with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
-            f.write(str_)
+            # c.es_max_count = -1
+            str_ = c.export()
+            with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
+                f.write(str_)
 
-        # data processing
-        features_dict, labels_dict, add_info = get_data(configs=c)
-        sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
+            # data processing
+            features_dict, labels_dict, add_info = get_data(configs=c)
+            sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
 
-        # model & optimizer
-        model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
-        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-        load_model(c.outpath, model, optimizer)
-        model.train()
-        model.to(tu.device)
+            # model & optimizer
+            model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
+            optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
+            load_model(c.outpath, model, optimizer)
+            model.train()
+            model.to(tu.device)
 
-        train(c, model, optimizer, sampler, 3400)
-        # train(c, model, optimizer, sampler, t=1700)
+            train(c, model, optimizer, sampler, 3400)
+            # train(c, model, optimizer, sampler, t=1700)
 
-        backtest(c, sampler)
+            backtest(c, sampler)
 
     # # ####### plot test
     # for ii, t in enumerate(range(base_i, sampler.max_len, rebal_freq)):
