@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import init, Module, functional as F
 from torch.nn.modules import Linear
 from torch.distributions import Categorical
+import torch.distributions as dist
 
 import torch_utils as tu
 
@@ -42,6 +43,32 @@ class XLinear(Module):
 
     def forward(self, x):
         return self.layer(x)
+
+
+class LogUniform(dist.TransformedDistribution):
+    def __init__(self, lb, ub):
+        super(LogUniform, self).__init__(dist.Uniform(lb.log(), ub.log()),
+                                         dist.ExpTransform())
+
+
+class ConditionNetwork(Module):
+    def __init__(self, in_dim, configs):
+        super(ConditionNetwork, self).__init__()
+        c = configs
+
+        self.hidden_layers = nn.ModuleList()
+
+        h_in = in_dim
+        for h_out in c.hidden_dim_cn:
+            self.hidden_layers.append(XLinear(h_in, h_out))
+            h_in = h_out
+
+
+
+
+    def forward(self, lambda_):
+
+
 
 
 class MyModel(Module):
@@ -341,7 +368,7 @@ def save_model(path, ep, model, optimizer):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, save_path)
-    print('model saved successfully.')
+    print('model saved successfully. ({})'.format(path))
 
 
 def load_model(path, model, optimizer):
@@ -358,66 +385,7 @@ def load_model(path, model, optimizer):
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(tu.device)
     model.eval()
-    print('model loaded successfully.')
+    print('model loaded successfully. ({})'.format(path))
     return checkpoint['ep']
 
 
-
-
-
-# class Model(Module):
-#     def __init__(self, in_dim, out_dim, hidden_dim=[72, 48, 32], dropout_r=0.5):
-#         super(Model, self).__init__()
-#         self.in_dim = in_dim
-#         self.out_dim = out_dim
-#         self.dropout_r = dropout_r
-#         self.hidden_layers = nn.ModuleList()
-#
-#         h_in = in_dim
-#         for h_out in hidden_dim:
-#             self.hidden_layers.append(XLinear(h_in, h_out))
-#             h_in = h_out
-#
-#         self.out_layer = XLinear(h_in, out_dim)
-#
-#         # asset allocation
-#         self.aa_hidden_layer = XLinear(out_dim * 3, 4)
-#         self.aa_out_layer = XLinear(4, out_dim)
-#
-#     def forward_notused(self, x, sample=True):
-#         mask = self.training or sample
-#
-#         for h_layer in self.hidden_layers:
-#             x = h_layer(x)
-#             x = F.dropout(x, p=self.dropout_r, training=mask)
-#             x = F.relu(x)
-#
-#         x = self.out_layer(x)
-#         return x
-#
-#     def sample_predict_notused(self, x, n_samples):
-#         # Just copies type from x, initializes new vector
-#         predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
-#
-#         for i in range(n_samples):
-#             y = self.forward(x, sample=True)
-#             predictions[i] = y
-#
-#         return predictions
-#
-#     def forward_with_correction_notused(self, features, labels=None, n_samples=1000):
-#         pred = self.sample_predict(features, n_samples=n_samples)
-#         pred_mu = torch.mean(pred, dim=0)
-#         pred_sigma = torch.std(pred, dim=0)
-#         if labels is not None:
-#             error_correction = torch.zeros_like(pred_mu) + torch.abs(labels - pred_mu)
-#         else:
-#             error_correction = torch.zeros_like(pred_mu)
-#
-#         x = torch.cat([pred_mu, pred_sigma, error_correction], dim=-1)
-#         x = self.aa_hidden_layer(x)
-#         x = F.relu(x)
-#         x = self.aa_out_layer(x)
-#         x = F.softmax(x)
-#
-#         return x
