@@ -59,7 +59,7 @@ class Configs:
         self.adaptive_lrx = 2  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 50
+        self.es_max_count = 20
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
@@ -82,7 +82,7 @@ class Configs:
         self.eval_freq = 1 # 20
         self.save_freq = 20
         self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = True  # model / forward_with_loss
+        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
 
         self.hidden_dim = [72, 48, 32]
         self.dropout_r = 0.3
@@ -94,8 +94,8 @@ class Configs:
         self.clip = 1.
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.001}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
+        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt': 0., 'wgt2': 0.02, 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -477,7 +477,7 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
     # plt.close(fig)
 
 
-def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
+def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/', suffix=""):
 
     n_asset = wgt_base.shape[1]
     viridis = cm.get_cmap('viridis', n_asset)
@@ -502,7 +502,7 @@ def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
         else:
             ax2.fill_between(x, wgt_result_cum[:, i-1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
 
-    fig.savefig(os.path.join(outpath, 'test_wgt.png'))
+    fig.savefig(os.path.join(outpath, 'test_wgt{}.png'.format(suffix)))
     plt.close(fig)
 
     # features, labels = test_features, test_labels; wgt = wgt_result
@@ -514,7 +514,7 @@ def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
     plt.legend(labels=y_df_before.columns)
 
     plt.yscale('log')
-    fig.savefig(os.path.join(outpath, 'test_y_before.png'))
+    fig.savefig(os.path.join(outpath, 'test_y_before{}.png'.format(suffix)))
     plt.close(fig)
 
     fig = plt.figure()
@@ -523,11 +523,11 @@ def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/'):
     plt.legend(labels=y_df_after.columns)
 
     plt.yscale('log')
-    fig.savefig(os.path.join(outpath, 'test_y_after.png'))
+    fig.savefig(os.path.join(outpath, 'test_y_after{}.png'.format(suffix)))
     plt.close(fig)
 
 
-def backtest(configs, sampler):
+def backtest(configs, sampler, suffix=""):
     c = configs
 
     wgt_base = np.zeros([sampler.max_len - c.base_i0, sampler.n_labels])
@@ -554,11 +554,15 @@ def backtest(configs, sampler):
         _, _, (dataset, _), _, _ = sampler.get_batch(t)
         features_prev, labels_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
 
-        outpath_t = os.path.join(c.outpath, str(t))
+        outpath_t = os.path.join(c.outpath, str(t)+suffix)
         load_model(outpath_t, model, optimizer)
 
         with torch.set_grad_enabled(False):
-            wgt_test, _, _, _, _ = model.forward_with_loss(features, None, mc_samples=c.mc_samples, loss_wgt=None, is_train=False)
+            model.eval()
+            wgt_test, _, _, _, _ = model.forward_with_loss(features, None, mc_samples=c.mc_samples, loss_wgt=None,
+                                                           features_prev=features_prev,
+                                                           labels_prev=labels_prev,
+                                                           is_train=False)
 
         wgt_result[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(wgt_test)[:c.retrain_days, :]
         wgt_base[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(features['wgt'])[:c.retrain_days, :]
@@ -573,7 +577,7 @@ def backtest(configs, sampler):
         ii += n_datapoint
 
     wgt_df = pd.DataFrame(data=wgt_result_calc, index=wgt_date, columns=sampler.add_infos['idx_list'])
-    wgt_df.to_csv(os.path.join(c.outpath, 'wgt.csv'))
+    wgt_df.to_csv(os.path.join(c.outpath, 'wgt{}.csv'.format(suffix)))
     y_date = wgt_date[:] + [sampler.add_infos['date'][-1]]
 
     active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
@@ -592,16 +596,16 @@ def backtest(configs, sampler):
                               'label': y_label['before_cost'],
                               'eq': y_eq['before_cost'],
                               'guide': y_guide['before_cost']}, index=y_date)
-    y_df_before.to_csv(os.path.join(c.outpath, 'y_before_cost.csv'))
+    y_df_before.to_csv(os.path.join(c.outpath, 'y_before_cost{}.csv'.format(suffix)))
 
     y_df_after = pd.DataFrame(data={'base': y_base['after_cost'],
                               'port': y_port['after_cost'],
                               'label': y_label['after_cost'],
                               'eq': y_eq['after_cost'],
                               'guide': y_guide['after_cost']}, index=y_date)
-    y_df_after.to_csv(os.path.join(c.outpath, 'y_after_cost.csv'))
+    y_df_after.to_csv(os.path.join(c.outpath, 'y_after_cost{}.csv'.format(suffix)))
 
-    plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath)
+    plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath, suffix)
 
 
 def train(configs, model, optimizer, sampler, t=None):
@@ -617,11 +621,15 @@ def train(configs, model, optimizer, sampler, t=None):
     for t in iter_:
         # ################ config in loop ################
         outpath_t = os.path.join(c.outpath, str(t))
-        if os.path.isdir(outpath_t):
-            r = re.compile("{}+".format(t))
-            n = len(list(filter(r.match, os.listdir(c.outpath))))
-            outpath_t = outpath_t + "_{}".format(n)
+        # if os.path.isdir(outpath_t):
+        r = re.compile("{}+".format(t))
+        n = len(list(filter(r.match, os.listdir(c.outpath))))   # 동일 t 폴더 개수
+        if n > 0:
+            n2 = int(max(list(filter(r.match, os.listdir(c.outpath)))).split('_')[-1]) + 1 # 동일 t폴더 중 가장 숫자 큰 수 (중간폴더 삭제시 개수꼬임)
+        else:
+            n2 = 0
 
+        outpath_t = outpath_t + "_{}".format(max(n, n2))
         os.makedirs(outpath_t, exist_ok=True)
 
         str_ = c.export()
@@ -839,11 +847,11 @@ def main(testmode=False):
     #                    l=[0.25, 0.1, 0.05, 0.6],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
-    # for key in ['l','m','h','eq',]:
-    for key in ['m']:
-        for seed in [100, 1000, 123]:
+    for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
+        for key in ['m','l','h','eq',]:
+    # for key in ['l']:
             # configs & variables
-            name = 'data0615_newlabel_seed03_{}'.format(key)
+            name = 'data0615_01_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
@@ -855,12 +863,6 @@ def main(testmode=False):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
-        # c.num_epochs = 3000
-            #
-            # c.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.001,
-            #                       'cost': 1., 'entropy': 0.0001}
-
-            # c.es_max_count = -1
             str_ = c.export()
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
@@ -876,10 +878,10 @@ def main(testmode=False):
             model.train()
             model.to(tu.device)
 
-            train(c, model, optimizer, sampler, 3400)
+            train(c, model, optimizer, sampler, )
             # train(c, model, optimizer, sampler, t=1700)
 
-            backtest(c, sampler)
+            backtest(c, sampler, suffix)
 
     # # ####### plot test
     # for ii, t in enumerate(range(base_i, sampler.max_len, rebal_freq)):
