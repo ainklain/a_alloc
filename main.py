@@ -47,7 +47,7 @@ class Configs:
         self.seed = 1000
         self.name = name
         self.lr = 5e-4
-        self.batch_size = 512
+        self.batch_size = 256
         self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 200
@@ -85,6 +85,7 @@ class Configs:
         self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
 
         self.hidden_dim = [72, 48, 32]
+        self.alloc_hidden_dim = [32, 32]
         self.dropout_r = 0.3
 
         self.random_guide_weight = 0.1
@@ -92,6 +93,11 @@ class Configs:
         self.random_label = 0.1  # random sample from dist.
 
         self.clip = 1.
+
+        ## FiLM
+        self.use_condition_network = True
+        self.film_hidden_dim = [16, 16]
+
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
@@ -841,11 +847,12 @@ def main(testmode=False):
     #                    l=[0.25, 0.1, 0.05, 0.6],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
-    for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-        for key in ['m','l','h','eq',]:
-    # for key in ['l']:
+    # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
+        # for key in ['m','l','h','eq',]:
+    for seed, suffix in zip([100], ["_0"]):
+        for key in ['h']:
             # configs & variables
-            name = 'data0615_01_{}'.format(key)
+            name = 'adata0615_01_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
