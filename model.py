@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import os
 import numpy as np
 import torch
@@ -16,8 +17,13 @@ try:
     builtins.profile
 except AttributeError:
     # No line profiler, provide a pass-through version
-    def profile(func): return func
+    def profile(func):
+        return func
+
+
     builtins.profile = profile
+
+
 # # #### profiler end ####
 
 
@@ -46,14 +52,20 @@ class XLinear(Module):
 
 
 class FiLM(nn.Module):
-  """
-  A Feature-wise Linear Modulation Layer from
-  'FiLM: Visual Reasoning with a General Conditioning Layer'
-  """
-  def forward(self, x, gammas, betas):
-    gammas = gammas.expand_as(x)
-    betas = betas.expand_as(x)
-    return (gammas * x) + betas
+    """
+    A Feature-wise Linear Modulation Layer from
+    'FiLM: Visual Reasoning with a General Conditioning Layer'
+    """
+
+    def forward(self, x, gammas, betas):
+        if gammas is not None:
+            gammas = gammas.expand_as(x)
+            x = x * gammas
+
+        if betas is not None:
+            betas = betas.expand_as(x)
+            x = x + betas
+        return x
 
 
 class LogUniform(dist.TransformedDistribution):
@@ -81,7 +93,8 @@ class ConditionNetwork(Module):
 
     def forward(self, n_batch):
         c = self.c
-        x = self.loss_dist.rsample([n_batch, self.in_dim])
+        loss_wgt = self.loss_dist.rsample([n_batch, self.in_dim]).to(tu.device)
+        x = loss_wgt[:]
         for h_layer in self.hidden_layers:
             x = h_layer(x)
             x = torch.relu(x)
@@ -90,7 +103,7 @@ class ConditionNetwork(Module):
         est_gamma, est_beta = torch.chunk(x[:, :np.sum(c.hidden_dim) * 2], 2, dim=-1)
         alloc_gamma, alloc_beta = torch.chunk(x[:, np.sum(c.hidden_dim) * 2:], 2, dim=-1)
 
-        return x, est_gamma, est_beta, alloc_gamma, alloc_beta
+        return loss_wgt, est_gamma, est_beta, alloc_gamma, alloc_beta
 
 
 class ExpectedReturnEstimator(Module):
@@ -127,15 +140,15 @@ class ExpectedReturnEstimator(Module):
                 if i == 0:
                     gamma = film_gamma[:, :c.hidden_dim[i]]
                 else:
-                    gamma = film_gamma[:, c.hidden_dim[i-1]:c.hidden_dim[i]]
-                gamma = gamma.unsqueeze(0) #.to(tu.device)
+                    gamma = film_gamma[:, c.hidden_dim[i - 1]:(c.hidden_dim[i - 1] + c.hidden_dim[i])]
+                gamma = gamma.unsqueeze(0)  # .to(tu.device)
 
             if film_beta is not None:
                 if i == 0:
                     beta = film_beta[:, :c.hidden_dim[i]]
                 else:
-                    beta = film_beta[:, c.hidden_dim[i-1]:c.hidden_dim[i]]
-                beta = beta.unsqueeze(0) #.to(tu.device)
+                    beta = film_beta[:, c.hidden_dim[i - 1]:(c.hidden_dim[i - 1] + c.hidden_dim[i])]
+                beta = beta.unsqueeze(0)  # .to(tu.device)
 
             x = h_layer(x)
             x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
@@ -148,15 +161,14 @@ class ExpectedReturnEstimator(Module):
         # print([p.grad for p in list(self.out_layer.parameters()) if p.grad is not None])
         return x
 
-    def run(self, x, mc_samples):
+    def run(self, x, mc_samples, film_gamma=None, film_beta=None):
         """
         x = torch.cat([features['idx'], features['macro']], dim=-1)
         x = torch.randn(512, 30).cuda()
         """
         x = x.unsqueeze(0).repeat(mc_samples, 1, 1)
-        x = self.forward(x, sample=True)
+        pred = self.forward(x, sample=True, film_gamma=film_gamma, film_beta=film_beta)
 
-        pred = self.sample_predict(x, mc_samples=mc_samples)
         pred_mu = torch.mean(pred, dim=0)
         with torch.set_grad_enabled(False):
             pred_sigma = torch.std(pred + 1e-6, dim=0, unbiased=False)
@@ -170,6 +182,7 @@ class StrategiesAllocator(Module):
         :param in_dim: pred_mu + pred_sigma + prev_wgt + input =
         :param out_dim: wgt_mu + wgt_sigma
         """
+        super(StrategiesAllocator, self).__init__()
         c = configs
         self.c = c
 
@@ -188,20 +201,21 @@ class StrategiesAllocator(Module):
         self.out_layer = XLinear(h_out, out_dim)
 
     def forward(self, x, film_gamma=None, film_beta=None):
+
         c = self.c
         for i in range(len(self.hidden_layers)):
             h_layer, bn = self.hidden_layers[i], self.hidden_bn[i]
             if film_gamma is not None:
                 if i == 0:
-                    gamma = film_gamma[:, :c.hidden_dim[i]]
+                    gamma = film_gamma[:, :c.alloc_hidden_dim[i]]
                 else:
-                    gamma = film_gamma[:, c.hidden_dim[i-1]:c.hidden_dim[i]]
+                    gamma = film_gamma[:, c.alloc_hidden_dim[i - 1]:(c.alloc_hidden_dim[i - 1]+c.alloc_hidden_dim[i])]
 
             if film_beta is not None:
                 if i == 0:
-                    beta = film_beta[:, :c.hidden_dim[i]]
+                    beta = film_beta[:, :c.alloc_hidden_dim[i]]
                 else:
-                    beta = film_beta[:, c.hidden_dim[i-1]:c.hidden_dim[i]]
+                    beta = film_beta[:, c.alloc_hidden_dim[i - 1]:(c.alloc_hidden_dim[i - 1]+c.alloc_hidden_dim[i])]
             x = h_layer(x)
             x = bn(x)
             if c.use_condition_network:
@@ -217,7 +231,7 @@ class StrategiesAllocator(Module):
 
 
 class MyModel(Module):
-    def __init__(self, in_dim, out_dim, configs,):
+    def __init__(self, in_dim, out_dim, configs, ):
         super(MyModel, self).__init__()
         c = configs
         self.in_dim = in_dim
@@ -230,11 +244,22 @@ class MyModel(Module):
 
         self.strategies_allocator = StrategiesAllocator(in_dim + out_dim * 3, out_dim * 2, configs)
 
-        self.loss_func_logy = nn.MSELoss()
-
         self.optim_state_dict = self.state_dict()
 
     def random_guide_weight(self, features, is_train, random_guide_weight):
+        c = self.c
+
+        # guide_wgt = self.guide_weight.repeat(len(x), 1)
+        # if is_train and self.random_guide_weight > 0:
+        #     replace_idx = np.random.choice(np.arange(len(x)), int(len(x) * self.random_guide_weight), replace=False)
+        #     guide_wgt[replace_idx] = torch.rand(len(replace_idx), guide_wgt.shape[1])
+        # guide_wgt = guide_wgt.to(x.device)
+
+        if c.base_weight is not None:
+            self.guide_weight = torch.FloatTensor([c.base_weight])
+        else:
+            self.guide_weight = torch.ones(1, self.out_dim, dtype=torch.float32) / self.out_dim
+
         with torch.set_grad_enabled(False):
             if is_train:
                 if np.random.rand() > random_guide_weight:
@@ -252,23 +277,31 @@ class MyModel(Module):
         wgt = features['wgt']
         """
         # expected return estimation
+        c = self.c
         x = torch.cat([features['idx'], features['macro']], dim=-1)
-        pred, pred_mu, pred_sigma = self.expected_return_estimator(x, mc_samples=mc_samples)
+        n_batch = x.shape[0]
+        if c.use_condition_network:
+            losses_wgt, est_gamma, est_beta, alloc_gamma, alloc_beta = self.condition_network(n_batch)
+        else:
+            losses_wgt = torch.ones(n_batch, c.loss_wgt).to(tu.device)
+            est_gamma, est_beta, alloc_gamma, alloc_beta = None, None, None, None
+
+        pred, pred_mu, pred_sigma = self.expected_return_estimator.run(x, mc_samples=mc_samples, film_gamma=est_gamma, film_beta=est_beta)
 
         # allocation
         x = torch.cat([pred_mu, pred_sigma, wgt, x], dim=-1)
-        wgt_mu, wgt_sigma = self.strategies_allocator(x)
+        wgt_mu, wgt_sigma = self.strategies_allocator(x, film_gamma=alloc_gamma, film_beta=alloc_beta)
 
-        return wgt_mu, wgt_sigma, pred_mu, pred_sigma
+        return wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt
 
     def predict(self, features, features_prev, is_train, mc_samples):
         c = self.c
-        guide_wgt = self.random_guide_weight(self, features, is_train, c.random_guide_weight)
+        guide_wgt = self.random_guide_weight(features, is_train, c.random_guide_weight)
 
         if features_prev is not None:
             with torch.set_grad_enabled(False):
                 # prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
-                prev_x, _, _, _ = self.forward(features_prev, guide_wgt, mc_samples)
+                prev_x, _, _, _, _ = self.forward(features_prev, guide_wgt, mc_samples)
                 prev_x = (1. + prev_x) * guide_wgt
                 prev_x = prev_x / (prev_x.sum(-1, keepdim=True) + 1e-6)
         else:
@@ -276,15 +309,16 @@ class MyModel(Module):
 
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
         if c.use_guide_wgt_as_prev_x is True:
-            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, guide_wgt, mc_samples)
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt = self.forward(features, guide_wgt, mc_samples)
         else:
-            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, prev_x, mc_samples)
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt = self.forward(features, prev_x, mc_samples)
 
         wgt_mu = (1. + wgt_mu) * guide_wgt
 
         # cash 제한 풀기
         noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
-        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True), torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
+        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True),
+                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
         wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
 
         wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
@@ -295,12 +329,12 @@ class MyModel(Module):
         else:
             x = wgt_mu
 
-        return dist, x, prev_x, pred_mu, pred_sigma, guide_wgt
+        return dist, x, prev_x, pred_mu, pred_sigma, guide_wgt, losses_wgt
 
     @profile
     def forward_with_loss(self, features, labels=None,
                           mc_samples=1000,
-                          loss_wgt=None,
+                          losses_wgt_fixed=None,
                           features_prev=None,
                           labels_prev=None,
                           is_train=True,
@@ -324,21 +358,16 @@ class MyModel(Module):
             labels_prev[key] = train_labels_prev[key][sampled_batch_idx]
             labels[key] = train_labels[key][sampled_batch_idx]
 
+
         """
         c = self.c
-        dist, x, prev_x, pred_mu, pred_sigma, guide_wgt = self.predict(features, features_prev, is_train, mc_samples)
+        dist, x, prev_x, pred_mu, pred_sigma, guide_wgt, losses_wgt = self.predict(features, features_prev, is_train, mc_samples)
 
         if torch.isnan(x).sum() > 0:
             for n, p in list(self.named_parameters()):
                 print(n, '\nval:\n', p, '\ngrad:\n', p.grad)
 
             return False
-
-        # guide_wgt = self.guide_weight.repeat(len(x), 1)
-        # if is_train and self.random_guide_weight > 0:
-        #     replace_idx = np.random.choice(np.arange(len(x)), int(len(x) * self.random_guide_weight), replace=False)
-        #     guide_wgt[replace_idx] = torch.rand(len(replace_idx), guide_wgt.shape[1])
-        # guide_wgt = guide_wgt.to(x.device)
 
         if labels is not None:
             with torch.set_grad_enabled(False):
@@ -350,48 +379,48 @@ class MyModel(Module):
                     flip_mask = random_setting < c.random_flip
                     next_logy[flip_mask] = -next_logy[flip_mask]
 
-                    sampling_mask = (random_setting >= c.random_flip) & (random_setting < (c.random_flip+c.random_label))
-                    next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
+                    sampling_mask = (random_setting >= c.random_flip) & (
+                                random_setting < (c.random_flip + c.random_label))
+                    next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + \
+                                               (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
 
                 # next_y = next_logy
                 next_y = torch.exp(next_logy) - 1.
 
             losses_dict = dict()
+            losses_wgt_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
-            losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()
-            losses_dict['mdd_pf'] = F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
+            if c.use_condition_network:
+                for key in c.loss_list:
+                    losses_wgt_dict[key] = losses_wgt[:, c.loss_list.index(key)].unsqueeze(-1)
+            else:
+                losses_wgt_dict = losses_wgt_fixed
+
+            losses_dict['y_pf'] = -((x - features['wgt']) * next_y * losses_wgt_dict['y_pf']).sum()
+            losses_dict['mdd_pf'] = (F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6) * losses_wgt_dict['mdd_pf']).sum()
             # losses_dict['mdd_pf'] = torch.relu(-(x * next_y).sum(dim=1) - 0.05).sum()
-            losses_dict['logy'] = self.loss_func_logy(pred_mu, labels['logy'])
-            losses_dict['wgt'] = nn.KLDivLoss(reduction='sum')(torch.log(x), labels['wgt'])
-            losses_dict['wgt2'] = nn.KLDivLoss(reduction='sum')(torch.log(x), features['wgt'])
-            losses_dict['wgt_guide'] = nn.KLDivLoss(reduction='sum')(torch.log(x), guide_wgt)
+            losses_dict['logy'] = (nn.MSELoss(reduction='none')(pred_mu, labels['logy']) * losses_wgt_dict['logy']).sum()
+            losses_dict['wgt_guide'] = (nn.KLDivLoss(reduction='none')(torch.log(x), guide_wgt) * losses_wgt_dict['wgt_guide']).sum()
 
             if labels_prev is not None:
                 next_y_prev = torch.exp(labels_prev['logy_for_calc']) - 1.
-                wgt_prev = prev_x * (1+next_y_prev)
+                wgt_prev = prev_x * (1 + next_y_prev)
                 wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
-                losses_dict['cost'] = torch.abs(x - wgt_prev).sum() * c.cost_rate
+                losses_dict['cost'] = (torch.abs(x - wgt_prev) * c.cost_rate * losses_wgt_dict['cost']).sum()
             else:
-                losses_dict['cost'] = torch.abs(x - features['wgt']).sum() * c.cost_rate
+                losses_dict['cost'] = (torch.abs(x - features['wgt']) * c.cost_rate * losses_wgt_dict['cost']).sum()
 
-            if loss_wgt is not None:
-                if c.max_entropy:
-                    losses_dict['entropy'] = -dist.entropy().sum()
+            if c.max_entropy:
+                losses_dict['entropy'] = (-dist.entropy() * losses_wgt_dict['entropy']).sum()
+            else:
+                losses_dict['entropy'] = (dist.entropy() * losses_wgt_dict['entropy']).sum()
+            # losses_dict['entropy'] = HLoss()(x)
+
+            for i_dict, key in enumerate(losses_dict.keys()):
+                if i_dict == 0:
+                    losses = losses_dict[key]
                 else:
-                    losses_dict['entropy'] = dist.entropy().sum()
-                # losses_dict['entropy'] = HLoss()(x)
-                i_dict = 0
-                for key in losses_dict.keys():
-                    if loss_wgt[key] == 0:
-                        continue
-
-                    if i_dict == 0:
-                        losses = losses_dict[key] * loss_wgt[key]
-                    else:
-                        losses += losses_dict[key] * loss_wgt[key]
-                    i_dict += 1
-            else:
-                losses = losses_dict['y_pf'] + losses_dict['wgt2']
+                    losses += losses_dict[key]
         else:
             losses = None
             losses_dict = None
@@ -405,7 +434,7 @@ class MyModel(Module):
         for key in labels.keys():
             labels[key].requires_grad = True
 
-        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, loss_wgt=None,
+        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, losses_wgt_fixed=None,
                                                        features_prev=features_prev, labels_prev=labels_prev)
 
         losses.backward(retain_graph=True)
@@ -429,9 +458,8 @@ class MyModel(Module):
         self.load_state_dict(self.optim_state_dict)
 
 
-
 class MyModel_old(Module):
-    def __init__(self, in_dim, out_dim, configs,):
+    def __init__(self, in_dim, out_dim, configs, ):
         super(MyModel, self).__init__()
         c = configs
         self.in_dim = in_dim
@@ -454,9 +482,9 @@ class MyModel_old(Module):
         self.out_layer = XLinear(h_out, out_dim)
 
         # asset allocation
-        self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim)//2)
+        self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim) // 2)
         self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim * 2)
-        self.aa_bn = nn.BatchNorm1d((out_dim * 3 + in_dim)//2)
+        self.aa_bn = nn.BatchNorm1d((out_dim * 3 + in_dim) // 2)
         self.aa_bn2 = nn.BatchNorm1d(out_dim * 2)
 
         self.aa_out_layer = XLinear(out_dim * 2, out_dim * 2)
@@ -465,6 +493,7 @@ class MyModel_old(Module):
 
         self.optim_state_dict = self.state_dict()
         # self.optim_
+
     # def init_weight(self):
     #     return torch.ones_like()
 
@@ -631,7 +660,8 @@ class MyModel_old(Module):
 
         # cash 제한 풀기
         noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
-        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True), torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
+        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True),
+                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
         wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
 
         wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
@@ -665,13 +695,15 @@ class MyModel_old(Module):
                     flip_mask = random_setting < c.random_flip
                     next_logy[flip_mask] = -next_logy[flip_mask]
 
-                    sampling_mask = (random_setting >= c.random_flip) & (random_setting < (c.random_flip+c.random_label))
-                    next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
+                    sampling_mask = (random_setting >= c.random_flip) & (
+                                random_setting < (c.random_flip + c.random_label))
+                    next_logy[sampling_mask] = labels['mu_for_calc'][sampling_mask] + \
+                                               (torch.randn_like(next_logy) * labels['sig_for_calc'])[sampling_mask]
 
                 # next_y = next_logy
                 next_y = torch.exp(next_logy) - 1.
 
-            losses_dict = dict()
+            losses_dict = OrderedDict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
             losses_dict['y_pf'] = -((x - features['wgt']) * next_y).sum()
             losses_dict['mdd_pf'] = F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
@@ -683,7 +715,7 @@ class MyModel_old(Module):
 
             if labels_prev is not None:
                 next_y_prev = torch.exp(labels_prev['logy_for_calc']) - 1.
-                wgt_prev = prev_x * (1+next_y_prev)
+                wgt_prev = prev_x * (1 + next_y_prev)
                 wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
                 losses_dict['cost'] = torch.abs(x - wgt_prev).sum() * c.cost_rate
             else:
@@ -746,5 +778,3 @@ def load_model(path, model, optimizer):
     model.eval()
     print('model loaded successfully. ({})'.format(path))
     return checkpoint['ep']
-
-

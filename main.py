@@ -59,14 +59,14 @@ class Configs:
         self.adaptive_lrx = 2  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = 20
+        self.es_max_count = -1
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
-        self.adaptive_flag = True
+        self.adaptive_flag = False
         self.adv_train = True
         self.n_pretrain = 5
         self.max_entropy = True
@@ -100,8 +100,9 @@ class Configs:
 
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt': 0., 'wgt2': 0.02, 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
+        self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
+        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -690,7 +691,7 @@ def train(configs, model, optimizer, sampler, t=None):
                 with torch.set_grad_enabled(False):
                     _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(f_dict['eval'], l_dict['eval']
                                                                                      , mc_samples=c.mc_samples
-                                                                                     , loss_wgt=loss_wgt
+                                                                                     , losses_wgt_fixed=loss_wgt
                                                                                      , features_prev=f_prev_dict['eval']
                                                                                      , labels_prev=l_prev_dict['eval'])
 
@@ -712,7 +713,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 _, losses_test, _, _, loss_test_dict = model.forward_with_loss(f_dict['test'], l_dict['test']
                                                                                , mc_samples=c.mc_samples
-                                                                               , loss_wgt=loss_wgt
+                                                                               , losses_wgt_fixed=loss_wgt
                                                                                , features_prev=f_prev_dict['test']
                                                                                , labels_prev=l_prev_dict['test']
                                                                                , is_train=False)
@@ -797,7 +798,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 _, losses_train, _, _, losses_train_dict = model.forward_with_loss(train_f, train_l
                                                                    , mc_samples=c.mc_samples
-                                                                   , loss_wgt=loss_wgt
+                                                                   , losses_wgt_fixed=loss_wgt
                                                                    , features_prev=train_f_prev
                                                                    , labels_prev=train_l_prev)
 
@@ -858,7 +859,7 @@ def main(testmode=False):
     for seed, suffix in zip([100], ["_0"]):
         for key in ['h']:
             # configs & variables
-            name = 'adata0615_01_{}'.format(key)
+            name = 'adata0615_03_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
