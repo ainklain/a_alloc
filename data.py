@@ -109,6 +109,7 @@ def arr_to_normal_ts(arr):
     return_value = (arr - np.nanmean(arr, axis=0, keepdims=True)) / (np.nanstd(arr, axis=0, ddof=1, keepdims=True) + 1e-6)
     return return_value
 
+
 @profile
 def get_data(configs):
     # label days: target하는 n days 수익률
@@ -205,7 +206,7 @@ def get_data(configs):
     add_info['min_begin_i'] = min_begin_i
 
     # truncate unlabeled data
-    label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_for_calc'])])
+    label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_f or_calc'])])
     for key in labels_dict.keys():
         labels_dict[key] = labels_dict[key][:label_len]
 

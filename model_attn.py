@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import init, Module, functional as F
-from torch.nn.modules import Linear
+import layer
 from torch.distributions import Categorical
 import torch.distributions as dist
 
@@ -26,29 +26,53 @@ except AttributeError:
 
 # # #### profiler end ####
 
+class TSEncoder(Module):
+    def __init__(self, d_k, d_v, d_model, d_ff, n_heads, dropout=0.1):
+        super(TSEncoder, self).__init__()
+        self.self_attn = layer.MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
+        self.cross_attn = layer.MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
 
-class HLoss(nn.Module):
-    def __init__(self):
-        super(HLoss, self).__init__()
+    def forward(self, x, query):
+        """
+        x : [batch_size, T, n_features]
+        query : [batch_size, 1, n_features]
+        """
+        x, s_attn = self.self_attn(x, x, x, attn_mask=None)
 
-    def forward(self, x):
-        b = F.softmax(x, dim=1) * F.log_softmax(x, dim=1)
-        b = -1.0 * b.sum()
-        # b = -1.0 * b.sum(dim=1)
-        # b = b.mean()
-        return b
+        cross_attn_mask = layer.get_attn_subsequent_mask(query)
+        y, c_attn = self.self_attn(query, x, x, attn_mask=cross_attn_mask)
+
+        return y
 
 
-class XLinear(Module):
-    def __init__(self, in_dim, out_dim, bias=True):
-        super(XLinear, self).__init__()
-        self.layer = Linear(in_dim, out_dim, bias)
-        init.xavier_uniform_(self.layer.weight)
-        if bias:
-            init.zeros_(self.layer.bias)
+class Encoder(Module):
+    def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
+                 max_seq_len, dropout=0.1, weighted=False):
+        # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model
+        super(Encoder, self).__init__()
+        self.d_model = d_model
+        self.pos_emb = PosEncoding(d_model, dropout=dropout, max_len=max_seq_len * 2)  # TODO: *10 fix
+        # self.dropout_emb = nn.Dropout(dropout)
+        self.layer_type = EncoderLayer
+        self.layers = nn.ModuleList(
+            [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
-    def forward(self, x):
-        return self.layer(x)
+    # @profile
+    def forward(self, enc_inputs, enc_inputs_len, return_attn=False):
+        # enc_outputs = self.src_emb(enc_inputs)
+        enc_outputs = self.pos_emb(enc_inputs)  # Adding positional encoding TODO: note
+        # enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len)  # Adding positional encoding TODO: note
+        # enc_outputs = self.dropout_emb(enc_outputs)
+
+        enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
+        enc_self_attns = []
+        for layer in self.layers:
+            enc_outputs, enc_self_attn = layer(enc_outputs, enc_self_attn_mask)
+            if return_attn:
+                enc_self_attns.append(enc_self_attn)
+
+        return enc_outputs, enc_self_attns
+
 
 
 class FiLM(nn.Module):
@@ -86,10 +110,10 @@ class ConditionNetwork(Module):
 
         h_in = self.in_dim
         for h_out in c.film_hidden_dim:
-            self.hidden_layers.append(XLinear(h_in, h_out))
+            self.hidden_layers.append(layer.Linear(h_in, h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_in, 2 * (np.sum(c.hidden_dim) + np.sum(c.alloc_hidden_dim)))
+        self.out_layer = layer.Linear(h_in, 2 * (np.sum(c.hidden_dim) + np.sum(c.alloc_hidden_dim)))
 
     def forward(self, n_batch):
         c = self.c
@@ -121,11 +145,11 @@ class ExpectedReturnEstimator(Module):
 
         h_in = in_dim
         for h_out in c.hidden_dim:
-            self.hidden_layers.append(XLinear(h_in, h_out))
+            self.hidden_layers.append(layer.Linear(h_in, h_out))
             self.hidden_bn.append(nn.BatchNorm1d(h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_out, out_dim)
+        self.out_layer = layer.Linear(h_out, out_dim)
 
     def forward(self, x, sample=True, film_gamma=None, film_beta=None):
         """
@@ -198,11 +222,11 @@ class StrategiesAllocator(Module):
 
         h_in = in_dim
         for h_out in c.alloc_hidden_dim:
-            self.hidden_layers.append(XLinear(h_in, h_out))
+            self.hidden_layers.append(layer.Linear(h_in, h_out))
             self.hidden_bn.append(nn.BatchNorm1d(h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_out, out_dim)
+        self.out_layer = layer.Linear(h_out, out_dim)
 
     def forward(self, x, film_gamma=None, film_beta=None):
 
@@ -707,19 +731,19 @@ class MyModel_original(Module):
 
         h_in = in_dim
         for h_out in c.hidden_dim:
-            self.hidden_layers.append(XLinear(h_in, h_out))
+            self.hidden_layers.append(layer.Linear(h_in, h_out))
             self.hidden_bn.append(nn.BatchNorm1d(h_out))
             h_in = h_out
 
-        self.out_layer = XLinear(h_out, out_dim)
+        self.out_layer = layer.Linear(h_out, out_dim)
 
         # asset allocation
-        self.aa_hidden_layer = XLinear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim) // 2)
-        self.aa_hidden_layer2 = XLinear((out_dim * 3 + in_dim) // 2, out_dim * 2)
+        self.aa_hidden_layer = layer.Linear(out_dim * 3 + in_dim, (out_dim * 3 + in_dim) // 2)
+        self.aa_hidden_layer2 = layer.Linear((out_dim * 3 + in_dim) // 2, out_dim * 2)
         self.aa_bn = nn.BatchNorm1d((out_dim * 3 + in_dim) // 2)
         self.aa_bn2 = nn.BatchNorm1d(out_dim * 2)
 
-        self.aa_out_layer = XLinear(out_dim * 2, out_dim * 2)
+        self.aa_out_layer = layer.Linear(out_dim * 2, out_dim * 2)
 
         self.loss_func_logy = nn.MSELoss()
 

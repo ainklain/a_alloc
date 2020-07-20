@@ -6,10 +6,9 @@ import numpy as np
 import pandas as pd
 import torch
 from matplotlib import pyplot as plt, cm
-import GPUtil
 
 
-from model import MyModel, load_model, save_model
+from model import MyModel_original as MyModel, load_model, save_model
 from data import get_data, Sampler, to_torch, data_loader
 import torch_utils as tu
 
@@ -38,6 +37,7 @@ def memo():
     """
     pass
 
+
 class Configs:
     def __init__(self, name):
         self.comment = """
@@ -48,7 +48,7 @@ class Configs:
         self.seed = 1000
         self.name = name
         self.lr = 5e-4
-        self.batch_size = 256
+        self.batch_size = 512
         self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 200
@@ -60,14 +60,14 @@ class Configs:
         self.adaptive_lrx = 2  # learning rate * 배수
 
         self.es_type = 'train'  # 'eval'
-        self.es_max_count = -1
+        self.es_max_count = 50
         self.retrain_days = 240
         self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
-        self.adaptive_flag = False
+        self.adaptive_flag = True
         self.adv_train = True
         self.n_pretrain = 5
         self.max_entropy = True
@@ -79,7 +79,7 @@ class Configs:
         # self.datatype = 'inv'
 
         self.cost_rate = 0.003
-        self.plot_freq = 50
+        self.plot_freq = 20
         self.eval_freq = 1 # 20
         self.save_freq = 20
         self.model_init_everytime = False
@@ -96,15 +96,15 @@ class Configs:
         self.clip = 1.
 
         ## FiLM
-        self.use_condition_network = True
+        self.use_condition_network = False
         self.film_hidden_dim = [16, 16]
 
-
-        # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
-        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
-        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+        # self.loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
+        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
+
+        self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
+        self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
@@ -402,7 +402,6 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
                  , horizontalalignment='center'
                  , verticalalignment='center'
                  , bbox=dict(facecolor='white', alpha=0.7))
-
 
     fig.savefig(os.path.join(outpath, '{}_test_y_{}.png'.format(ep, suffix)))
     plt.close(fig)
@@ -709,11 +708,11 @@ def train(configs, model, optimizer, sampler, t=None):
                         c.es_count = 0
 
                 str_ = "(es_count:{} / min_loss:{}) ".format(c.es_count, c.min_eval_loss)
-                for i_loss, key in enumerate(c.loss_list):
-                    str_ += "{}: l{:2.2f} w{:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key])), tu.np_ify(model.loss_logvars[i_loss]))
+                # for i_loss, key in enumerate(c.loss_list):
+                #     str_ += "{}: l{:2.2f} w{:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key])), tu.np_ify(model.loss_logvars[i_loss]))
 
-                # for key in losses_eval_dict.keys():
-                #     str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * loss_wgt[key]))
+                for key in losses_eval_dict.keys():
+                    str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * loss_wgt[key]))
 
                 _, losses_test, _, _, loss_test_dict = model.forward_with_loss(f_dict['test'], l_dict['test']
                                                                                , mc_samples=c.mc_samples
@@ -726,7 +725,6 @@ def train(configs, model, optimizer, sampler, t=None):
                 save_model(outpath_t, ep, model, optimizer)
                 suffix = "_e[{:2.2f}]test[{:2.2f}]_es[{}]".format(losses_eval, losses_test, c.es_count)
                 if ep % (c.plot_freq * c.eval_freq) == 0:
-                    GPUtil.showUtilization()
                     plot_each(ep, sampler, model, dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
                               , insample_boundary=insample_boundary
                               , guide_date=guide_date
@@ -864,7 +862,7 @@ def main(testmode=False):
     for seed, suffix in zip([100], ["_0"]):
         for key in ['l']:
             # configs & variables
-            name = 'adata0615_logvar03_{}'.format(key)
+            name = 'adata0615_replicate_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
@@ -891,7 +889,7 @@ def main(testmode=False):
             model.train()
             model.to(tu.device)
 
-            train(c, model, optimizer, sampler, )
+            train(c, model, optimizer, sampler, 3489)
             # train(c, model, optimizer, sampler, t=1700)
 
             backtest(c, sampler, suffix)
@@ -905,255 +903,3 @@ def main(testmode=False):
     #
     #     plot_each(0, model, test_features_insample, test_labels_insample, insample_boundary=insample_boundary,
     #               n_samples=n_samples, rebal_freq=rebal_freq, suffix=t, outpath=outpath)
-
-
-def train_anp(dataset, model, optimizer, is_train):
-
-    if is_train:
-        iter_ = 100
-        model.train()
-    else:
-        iter_ = 1
-        model.eval()
-
-    losses = 0
-    for it in range(iter_):
-        batch_dataset = random.sample(dataset, 64)  # batch_size
-        c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(64)])
-        c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(64)])
-        t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(64)])
-        t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(64)])
-
-        c_x = torch.from_numpy(c_x).float().to(tu.device)
-        c_y = torch.from_numpy(c_y).float().to(tu.device)
-        t_x = torch.from_numpy(t_x).float().to(tu.device)
-        t_y = torch.from_numpy(t_y).float().to(tu.device)
-
-        query = (c_x, c_y), t_x
-        target_y = t_y
-
-        with torch.set_grad_enabled(is_train):
-            mu, sigma, log_p, global_kl, local_kl, loss = model(query, target_y)
-
-            if is_train:
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-        losses += tu.np_ify(loss)
-
-    losses = losses / iter_
-    return losses
-
-
-# @profile
-def plot_functions(path, ep, base_i, sampler, model):
-    """Plots the predicted mean and variance and the context points.
-
-    Args:
-        target_x: An array of shape [B,num_targets,1] that contains the
-            x values of the target points.
-        target_y: An array of shape [B,num_targets,1] that contains the
-            y values of the target points.
-        context_x: An array of shape [B,num_contexts,1] that contains
-            the x values of the context points.
-        context_y: An array of shape [B,num_contexts,1] that contains
-            the y values of the context points.
-        pred_y: An array of shape [B,num_targets,1] that contains the
-            predicted means of the y values at the target points in target_x.
-        std: An array of shape [B,num_targets,1] that contains the
-            predicted std dev of the y values at the target points in target_x.
-    """
-
-    dataset = sampler.get_batch_set(base_i, is_train=False)
-    batch_dataset = dataset[::-20]
-    batch_dataset.reverse()
-    c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(len(batch_dataset))])
-    c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(len(batch_dataset))])
-    t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(len(batch_dataset))])
-    t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(len(batch_dataset))])
-
-    c_x = torch.from_numpy(c_x).float().to(tu.device)
-    c_y = torch.from_numpy(c_y).float().to(tu.device)
-    t_x = torch.from_numpy(t_x).float().to(tu.device)
-    t_y = torch.from_numpy(t_y).float().to(tu.device)
-
-    query = (c_x, c_y), t_x
-    target_y = t_y
-
-    with torch.set_grad_enabled(False):
-        mu, sigma, log_p, global_kl, local_kl, loss = model(query, None)
-
-    t_sample = t_x[0, :, -1]
-
-
-
-    # t = t_x[0, :, -1]
-    t = np.arange(len(mu) + 1)
-    pred_logy = tu.np_ify(mu[:, -1, :])
-    pred_sigma = tu.np_ify(sigma[:, -1, :])
-    label_logy = tu.np_ify(target_y[:, -1, :])
-
-    pred_logy_cum = np.concatenate([np.zeros([1, pred_logy.shape[-1]]), pred_logy.cumsum(axis=0)], axis=0)
-    label_logy_cum = np.concatenate([np.zeros([1, label_logy.shape[-1]]), label_logy.cumsum(axis=0)], axis=0)
-    pred_sigma_cum = np.concatenate([np.zeros([1, pred_sigma.shape[-1]]), pred_sigma], axis=0)
-
-    fig = plt.figure()
-    ax = []
-    for plot_i in range(4):
-        ax.append(fig.add_subplot(2, 2, plot_i+1))
-        # Plot everything
-        ax[plot_i].plot(t[:-1], pred_logy[:, plot_i], 'b', linewidth=2)
-        ax[plot_i].plot(t[:-1], label_logy[:, plot_i], 'k:', linewidth=2)
-
-        plt.fill_between(
-            t[:-1],
-            pred_logy[:, plot_i] - pred_sigma[:, plot_i],
-            pred_logy[:, plot_i] + pred_sigma[:, plot_i],
-            alpha=0.2,
-            facecolor='#65c9f7',
-            interpolate=True)
-        plt.grid('off')
-
-    file_path = os.path.join(path, 'test_{}.png'.format(ep))
-    fig.savefig(file_path)
-    plt.close(fig)
-
-
-    fig = plt.figure()
-    ax = []
-    for plot_i in range(4):
-        ax.append(fig.add_subplot(2, 2, plot_i+1))
-        # Plot everything
-        ax[plot_i].plot(t, pred_logy_cum[:, plot_i], 'b', linewidth=2)
-        ax[plot_i].plot(t, label_logy_cum[:, plot_i], 'k:', linewidth=2)
-
-        plt.fill_between(
-            t,
-            pred_logy_cum[:, plot_i] - pred_sigma_cum[:, plot_i],
-            pred_logy_cum[:, plot_i] + pred_sigma_cum[:, plot_i],
-            alpha=0.2,
-            facecolor='#65c9f7',
-            interpolate=True)
-        plt.grid('off')
-
-    file_path = os.path.join(path, 'test_cum_{}.png'.format(ep))
-    fig.savefig(file_path)
-    plt.close(fig)
-
-
-def main_anp():
-    from model_anp import LatentModel
-    from data_anp import get_data as get_data_anp, Sampler as Sampler_anp
-    # name = 'apptest_adv_28'
-    name = 'anp_2'
-    c = Configs(name)
-
-    str_ = c.export()
-    with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
-        f.write(str_)
-
-    # data processing
-    features_dict, labels_dict, add_infos = get_data_anp(configs=c)
-    sampler = Sampler_anp(features_dict, labels_dict, add_infos, configs=c)
-
-    # model & optimizer
-    model = LatentModel(32, sampler.n_features, sampler.n_labels)
-    optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-    load_model(c.outpath, model, optimizer)
-    model.train()
-    model.to(tu.device)
-
-    min_eval_loss = 99999
-    earlystop_count = 0
-    ep = 0
-    base_i = 2500
-    dataset = sampler.get_batch_set(base_i)
-    while ep < c.num_epochs:
-        eval_loss = train_anp(dataset, model, optimizer, is_train=False)
-        if min_eval_loss > eval_loss:
-            model.save_to_optim()
-            min_eval_loss = eval_loss
-            earlystop_count = 0
-        else:
-            earlystop_count += 1
-
-        print("[base_i: {}, ep: {}] eval_loss: {} / count: {}".format(base_i, ep, eval_loss, earlystop_count))
-        if earlystop_count >= 5:
-            model.load_from_optim()
-            plot_functions(c.outpath, ep, base_i + 500, sampler, model)
-
-            min_eval_loss = 99999
-            earlystop_count = 0
-            break
-
-        if ep % 5 == 0:
-            plot_functions(c.outpath, ep, base_i, sampler, model)
-
-        train_loss = train_anp(dataset, model, optimizer, is_train=True)
-        ep += 1
-
-
-def test():
-    adaptive_lrx_l = [2, 5, 10]  # learning rate * 배수
-    use_accum_data_l = [True, False]  # [sampler] 데이터 누적할지 말지
-
-    random_guide_weight_l = [0., 0.2, 0.5, 0.8, 1.]
-    adaptive_loss_wgt_l = [
-        {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.0001}]
-    # adaptive_loss_wgt_l = [{'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.0001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.01}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.1}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.5, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 1, 'cost': 1., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 100., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 10., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 0.5, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      ]
-    for adaptive_lrx in adaptive_lrx_l:
-        for use_accum_data in use_accum_data_l:
-            for t in [3600, 3000, 1500, ]:
-                for random_guide_weight in random_guide_weight_l:
-                    for adaptive_loss_wgt in adaptive_loss_wgt_l:
-                        name = 'app_adv_5'
-                        c = Configs(name)
-
-                        str_ = c.export()
-                        with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
-                            f.write(str_)
-
-                        c.adaptive_lrx = adaptive_lrx
-                        c.use_accum_data = use_accum_data
-                        c.random_guide_weight = random_guide_weight
-                        c.adaptive_loss_wgt = adaptive_loss_wgt
-
-                        # data processing
-                        features_dict, labels_dict, add_info = get_data(configs=c)
-                        sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
-
-                        # model & optimizer
-                        model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
-                        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-                        load_model(c.outpath, model, optimizer)
-                        model.train()
-                        model.to(tu.device)
-
-                        train(c, model, optimizer, sampler, t)
-
-# if __name__ == '__main__':
-#     main()
