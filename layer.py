@@ -223,7 +223,18 @@ class _MultiHeadAttention(Base):
 
         self.attention = ScaledDotProductAttention(d_k, dropout)
 
-    def forward(self, q, k, v, attn_mask):
+    @classmethod
+    def get_attn_subsequent_mask(cls, seq):
+        assert seq.dim() == 3
+        attn_shape = [seq.size(0), seq.size(1), seq.size(1)]
+        subsequent_mask = np.triu(np.ones(attn_shape), k=1)
+        subsequent_mask = torch.from_numpy(subsequent_mask).bool()
+        if seq.is_cuda:
+            subsequent_mask = subsequent_mask.cuda()
+
+        return subsequent_mask
+
+    def forward(self, q, k, v, use_attn_mask=False):
         # q: [b_size x len_q x d_model]
         # k: [b_size x len_k x d_model]
         # v: [b_size x len_k x d_model]
@@ -236,8 +247,11 @@ class _MultiHeadAttention(Base):
         k_s = self.w_k(k).view(b_size, -1, self.n_heads, self.d_k).transpose(1, 2)
         v_s = self.w_v(v).view(b_size, -1, self.n_heads, self.d_v).transpose(1, 2)
 
-        if attn_mask is not None:  # attn_mask: [b_size x len_q x len_k]
+        if use_attn_mask is True:  # attn_mask: [b_size x len_q x len_k]
+            attn_mask = self.get_attn_subsequent_mask(v)
             attn_mask = attn_mask.unsqueeze(1).repeat(1, self.n_heads, 1, 1)
+        else:
+            attn_mask = None
         # context: [b_size x n_heads x len_q x d_v], attn: [b_size x n_heads x len_q x len_k]
         context, attn = self.attention(q_s, k_s, v_s, attn_mask=attn_mask)
         # context: [b_size x len_q x n_heads * d_v]
@@ -246,7 +260,7 @@ class _MultiHeadAttention(Base):
         # return the context and attention weights
         return context, attn
 
-    def compute_graph(self, q, k, v, attn_mask, weights_list):
+    def compute_graph(self, q, k, v, use_attn_mask, weights_list):
         # q: [b_size x len_q x d_model]
         # k: [b_size x len_k x d_model]
         # v: [b_size x len_k x d_model]
@@ -263,8 +277,11 @@ class _MultiHeadAttention(Base):
         k_s = w_k['m'].compute_graph(k, w_k['w']).view(b_size, -1, self.n_heads, self.d_k).transpose(1, 2)
         v_s = w_v['m'].compute_graph(v, w_v['w']).view(b_size, -1, self.n_heads, self.d_v).transpose(1, 2)
 
-        if attn_mask is not None:  # attn_mask: [b_size x len_q x len_k]
+        if use_attn_mask is True:  # attn_mask: [b_size x len_q x len_k]
+            attn_mask = self.get_attn_subsequent_mask(v)
             attn_mask = attn_mask.unsqueeze(1).repeat(1, self.n_heads, 1, 1)
+        else:
+            attn_mask = None
         # context: [b_size x n_heads x len_q x d_v], attn: [b_size x n_heads x len_q x len_k]
         context, attn = self.attention(q_s, k_s, v_s, attn_mask=attn_mask)
         # context: [b_size x len_q x n_heads * d_v]
@@ -283,19 +300,19 @@ class MultiHeadAttention(Base):
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = LayerNormalization(d_model)
 
-    def forward(self, q, k, v, attn_mask):
+    def forward(self, q, k, v, use_attn_mask):
         # q: [b_size x len_q x d_model]
         # k: [b_size x len_k x d_model]
         # v: [b_size x len_v x d_model] note (len_k == len_v)
         residual = q
         # context: a tensor of shape [b_size x len_q x n_heads * d_v]
-        context, attn = self.multihead_attn(q, k, v, attn_mask=attn_mask)
+        context, attn = self.multihead_attn(q, k, v, use_attn_mask=use_attn_mask)
 
         # project back to the residual size, outputs: [b_size x len_q x d_model]
         output = self.dropout(self.proj(context))
         return self.layer_norm(residual + output), attn
 
-    def compute_graph(self, q, k, v, attn_mask, weights_list):
+    def compute_graph(self, q, k, v, use_attn_mask, weights_list):
         c_dict = self.get_children_dict(weights_list)
         multihead_attn = c_dict['multihead_attn']
         proj = c_dict['proj']
@@ -305,12 +322,11 @@ class MultiHeadAttention(Base):
         # v: [b_size x len_v x d_model] note (len_k == len_v)
         residual = q
         # context: a tensor of shape [b_size x len_q x n_heads * d_v]
-        context, attn = multihead_attn['m'].compute_graph(q, k, v, attn_mask=attn_mask, weights_list=multihead_attn['w'])
+        context, attn = multihead_attn['m'].compute_graph(q, k, v, use_attn_mask=use_attn_mask, weights_list=multihead_attn['w'])
 
         # project back to the residual size, outputs: [b_size x len_q x d_model]
         output = self.dropout(proj['m'].compute_graph(context, weights_list=proj['w']))
         return layer_norm['m'].compute_graph(residual + output, weights_list=layer_norm['w']), attn
-
 
 
 class MultiHeadAttention_anp(nn.Module):
@@ -407,8 +423,6 @@ class Attention(nn.Module):
         result = self.layer_norm(result)
 
         return result, attns
-
-
 
 
 class FeedForward(Base):
@@ -524,22 +538,10 @@ class EncoderLayer(Base):
         self.enc_self_attn = MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
         self.pos_ffn = PoswiseFeedForwardNet(d_model, d_ff, dropout)
 
-    def forward(self, enc_inputs, self_attn_mask):
+    def forward(self, enc_inputs, use_attn_mask=False):
         enc_outputs, attn = self.enc_self_attn(enc_inputs, enc_inputs,
-                                               enc_inputs, attn_mask=self_attn_mask)
+                                               enc_inputs, use_attn_mask=use_attn_mask)
         enc_outputs = self.pos_ffn(enc_outputs)
-
-        return enc_outputs, attn
-
-    def compute_graph(self, enc_inputs, self_attn_mask, weights_list):
-        c_dict = self.get_children_dict(weights_list)
-        enc_self_attn = c_dict['enc_self_attn']
-        pos_ffn = c_dict['pos_ffn']
-
-        enc_outputs, attn = enc_self_attn['m'].compute_graph(enc_inputs, enc_inputs, enc_inputs
-                                                             , attn_mask=self_attn_mask
-                                                             , weights_list=enc_self_attn['w'])
-        enc_outputs = pos_ffn['m'].compute_graph(enc_outputs, weights_list=pos_ffn['w'])
 
         return enc_outputs, attn
 
@@ -567,26 +569,12 @@ class DecoderLayer(Base):
         self.dec_enc_attn = MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
         self.pos_ffn = PoswiseFeedForwardNet(d_model, d_ff, dropout)
 
-    def forward(self, dec_inputs, enc_outputs, self_attn_mask, enc_attn_mask):
+    def forward(self, dec_inputs, enc_outputs):
         dec_outputs, dec_self_attn = self.dec_self_attn(dec_inputs, dec_inputs,
-                                                        dec_inputs, attn_mask=self_attn_mask)
+                                                        dec_inputs, use_attn_mask=True)
         dec_outputs, dec_enc_attn = self.dec_enc_attn(dec_outputs, enc_outputs,
-                                                      enc_outputs, attn_mask=enc_attn_mask)
+                                                      enc_outputs, use_attn_mask=False)
         dec_outputs = self.pos_ffn(dec_outputs)
-
-        return dec_outputs, dec_self_attn, dec_enc_attn
-
-    def compute_graph(self, dec_inputs, enc_outputs, self_attn_mask, enc_attn_mask, weights_list):
-        c_dict = self.get_children_dict(weights_list)
-        dec_self_attn = c_dict['dec_self_attn']
-        dec_enc_attn = c_dict['dec_enc_attn']
-        pos_ffn = c_dict['pos_ffn']
-
-        dec_outputs, dec_self_attn = dec_self_attn['m'].compute_graph(dec_inputs, dec_inputs, dec_inputs
-                                                                      , attn_mask=self_attn_mask, weights_list=dec_self_attn['w'])
-        dec_outputs, dec_enc_attn = dec_enc_attn['m'].compute_graph(dec_outputs, enc_outputs, enc_outputs
-                                                                    , attn_mask=enc_attn_mask, weights_list=dec_enc_attn['w'])
-        dec_outputs = pos_ffn['m'].compute_graph(dec_outputs, weights_list=pos_ffn['w'])
 
         return dec_outputs, dec_self_attn, dec_enc_attn
 

@@ -206,7 +206,7 @@ def get_data(configs):
     add_info['min_begin_i'] = min_begin_i
 
     # truncate unlabeled data
-    label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_f or_calc'])])
+    label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_for_calc'])])
     for key in labels_dict.keys():
         labels_dict[key] = labels_dict[key][:label_len]
 

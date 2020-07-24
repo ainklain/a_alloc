@@ -60,6 +60,22 @@ class RollingStd(Rolling):
         return self.rolling(partial(np.nanstd, ddof=1), x)
 
 
+class RollingMeanReturn(Rolling):
+    def __init__(self, window=500):
+        super(RollingMeanReturn, self).__init__(window)
+
+    def forward(self, x):
+        return RollingMean(self.window)(RollingReturn(1)(x))
+
+
+class RollingStdReturn(Rolling):
+    def __init__(self, window=500):
+        super(RollingStdReturn, self).__init__(window)
+
+    def forward(self, x):
+        return RollingStd(self.window)(RollingReturn(1)(x))
+
+
 class RollingSharpe(Rolling):
     def __init__(self, window=500):
         super(RollingSharpe, self).__init__(window)
@@ -101,24 +117,19 @@ class Transforms:
         self.transforms_list = transforms_list
 
     def sequential(self, x):
-        for transforms_func in self.transforms_list:
+        for transforms_func, suffix in self.transforms_list:
             x = transforms_func(x)
 
         return x
 
-    def apply(self, x, columns, suffix=None, reduce='none'):
+    def apply(self, x, columns, reduce='none'):
         assert reduce in ['none', 'concat']
-        if suffix:
-            assert len(self.transforms_list) == len(suffix)
-            iter_ = zip(suffix, self.transforms_list)
-        else:
-            iter_ = enumerate(self.transforms_list)
 
         y = []
         new_columns = []
-        for i, transforms_func in iter_:
+        for transforms_func, suffix in self.transforms_list:
             y.append(transforms_func(x))
-            new_columns.append(["{}_{}".format(c, str(i)) for c in columns])
+            new_columns.append(["{}_{}".format(c, suffix) for c in columns])
 
         if reduce == 'concat':
             y = np.concatenate(y, axis=-1)

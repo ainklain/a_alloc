@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt, cm
 import GPUtil
 
 
-from model import MyModel, load_model, save_model
-from data import get_data, Sampler, to_torch, data_loader
+from model_v2 import MyModel, load_model, save_model
+from dataset_v2 import DatasetManager, AplusData, MacroData
 import torch_utils as tu
 
 # # #### profiler start ####
@@ -623,11 +623,11 @@ def backtest(configs, sampler, suffix=""):
     plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath, suffix)
 
 
-def train(configs, model, optimizer, sampler, t=None):
+def train(configs, model, optimizer, dataset_manager, t=None):
     c = configs
 
     if t is None:
-        iter_ = range(c.base_i0, sampler.max_len, c.retrain_days)
+        iter_ = range(c.base_i0, dataset_manager.max_len, c.retrain_days)
         t0 = c.base_i0
     else:
         iter_ = range(t, t+1)
@@ -659,7 +659,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
         if c.model_init_everytime:
             # ################ model & optimizer in loop  # load 무시, 매 타임 초기화 ################
-            model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
+            model = MyModel(len(dataset_manager.features_list), len(dataset_manager.labels_list), configs=c)
             model.train()
             model.to(tu.device)
 
@@ -888,279 +888,19 @@ def main(testmode=False):
                 f.write(str_)
 
             # data processing
-            features_dict, labels_dict, add_info = get_data(configs=c)
-            sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
+
+            data_list = [AplusData(), MacroData()]
+            dm = DatasetManager(data_list, c.test_days, c.batch_size)
+
 
             # model & optimizer
-            model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
+            model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
             optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
             load_model(c.outpath, model, optimizer)
             model.train()
             model.to(tu.device)
 
-            train(c, model, optimizer, sampler, 3489)
+            train(c, model, optimizer, dm, 3489)
             # train(c, model, optimizer, sampler, t=1700)
 
             backtest(c, sampler, suffix)
-
-    # # ####### plot test
-    # for ii, t in enumerate(range(base_i, sampler.max_len, rebal_freq)):
-    #     train_dataset, eval_dataset, test_dataset, (test_dataset_insample, insample_boundary) = sampler.get_batch(t)
-    #     test_features_insample, test_labels_insample = to_torch(test_dataset_insample)
-    #
-    #     test_features_insample, test_labels_insample = tu.to_device(tu.device, [test_features_insample, test_labels_insample])
-    #
-    #     plot_each(0, model, test_features_insample, test_labels_insample, insample_boundary=insample_boundary,
-    #               n_samples=n_samples, rebal_freq=rebal_freq, suffix=t, outpath=outpath)
-
-
-def train_anp(dataset, model, optimizer, is_train):
-
-    if is_train:
-        iter_ = 100
-        model.train()
-    else:
-        iter_ = 1
-        model.eval()
-
-    losses = 0
-    for it in range(iter_):
-        batch_dataset = random.sample(dataset, 64)  # batch_size
-        c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(64)])
-        c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(64)])
-        t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(64)])
-        t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(64)])
-
-        c_x = torch.from_numpy(c_x).float().to(tu.device)
-        c_y = torch.from_numpy(c_y).float().to(tu.device)
-        t_x = torch.from_numpy(t_x).float().to(tu.device)
-        t_y = torch.from_numpy(t_y).float().to(tu.device)
-
-        query = (c_x, c_y), t_x
-        target_y = t_y
-
-        with torch.set_grad_enabled(is_train):
-            mu, sigma, log_p, global_kl, local_kl, loss = model(query, target_y)
-
-            if is_train:
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-        losses += tu.np_ify(loss)
-
-    losses = losses / iter_
-    return losses
-
-
-# @profile
-def plot_functions(path, ep, base_i, sampler, model):
-    """Plots the predicted mean and variance and the context points.
-
-    Args:
-        target_x: An array of shape [B,num_targets,1] that contains the
-            x values of the target points.
-        target_y: An array of shape [B,num_targets,1] that contains the
-            y values of the target points.
-        context_x: An array of shape [B,num_contexts,1] that contains
-            the x values of the context points.
-        context_y: An array of shape [B,num_contexts,1] that contains
-            the y values of the context points.
-        pred_y: An array of shape [B,num_targets,1] that contains the
-            predicted means of the y values at the target points in target_x.
-        std: An array of shape [B,num_targets,1] that contains the
-            predicted std dev of the y values at the target points in target_x.
-    """
-
-    dataset = sampler.get_batch_set(base_i, is_train=False)
-    batch_dataset = dataset[::-20]
-    batch_dataset.reverse()
-    c_x = np.stack([batch_dataset[batch_i][0] for batch_i in range(len(batch_dataset))])
-    c_y = np.stack([batch_dataset[batch_i][1] for batch_i in range(len(batch_dataset))])
-    t_x = np.stack([batch_dataset[batch_i][2] for batch_i in range(len(batch_dataset))])
-    t_y = np.stack([batch_dataset[batch_i][3] for batch_i in range(len(batch_dataset))])
-
-    c_x = torch.from_numpy(c_x).float().to(tu.device)
-    c_y = torch.from_numpy(c_y).float().to(tu.device)
-    t_x = torch.from_numpy(t_x).float().to(tu.device)
-    t_y = torch.from_numpy(t_y).float().to(tu.device)
-
-    query = (c_x, c_y), t_x
-    target_y = t_y
-
-    with torch.set_grad_enabled(False):
-        mu, sigma, log_p, global_kl, local_kl, loss = model(query, None)
-
-    t_sample = t_x[0, :, -1]
-
-
-
-    # t = t_x[0, :, -1]
-    t = np.arange(len(mu) + 1)
-    pred_logy = tu.np_ify(mu[:, -1, :])
-    pred_sigma = tu.np_ify(sigma[:, -1, :])
-    label_logy = tu.np_ify(target_y[:, -1, :])
-
-    pred_logy_cum = np.concatenate([np.zeros([1, pred_logy.shape[-1]]), pred_logy.cumsum(axis=0)], axis=0)
-    label_logy_cum = np.concatenate([np.zeros([1, label_logy.shape[-1]]), label_logy.cumsum(axis=0)], axis=0)
-    pred_sigma_cum = np.concatenate([np.zeros([1, pred_sigma.shape[-1]]), pred_sigma], axis=0)
-
-    fig = plt.figure()
-    ax = []
-    for plot_i in range(4):
-        ax.append(fig.add_subplot(2, 2, plot_i+1))
-        # Plot everything
-        ax[plot_i].plot(t[:-1], pred_logy[:, plot_i], 'b', linewidth=2)
-        ax[plot_i].plot(t[:-1], label_logy[:, plot_i], 'k:', linewidth=2)
-
-        plt.fill_between(
-            t[:-1],
-            pred_logy[:, plot_i] - pred_sigma[:, plot_i],
-            pred_logy[:, plot_i] + pred_sigma[:, plot_i],
-            alpha=0.2,
-            facecolor='#65c9f7',
-            interpolate=True)
-        plt.grid('off')
-
-    file_path = os.path.join(path, 'test_{}.png'.format(ep))
-    fig.savefig(file_path)
-    plt.close(fig)
-
-
-    fig = plt.figure()
-    ax = []
-    for plot_i in range(4):
-        ax.append(fig.add_subplot(2, 2, plot_i+1))
-        # Plot everything
-        ax[plot_i].plot(t, pred_logy_cum[:, plot_i], 'b', linewidth=2)
-        ax[plot_i].plot(t, label_logy_cum[:, plot_i], 'k:', linewidth=2)
-
-        plt.fill_between(
-            t,
-            pred_logy_cum[:, plot_i] - pred_sigma_cum[:, plot_i],
-            pred_logy_cum[:, plot_i] + pred_sigma_cum[:, plot_i],
-            alpha=0.2,
-            facecolor='#65c9f7',
-            interpolate=True)
-        plt.grid('off')
-
-    file_path = os.path.join(path, 'test_cum_{}.png'.format(ep))
-    fig.savefig(file_path)
-    plt.close(fig)
-
-
-def main_anp():
-    from model_anp import LatentModel
-    from data_anp import get_data as get_data_anp, Sampler as Sampler_anp
-    # name = 'apptest_adv_28'
-    name = 'anp_2'
-    c = Configs(name)
-
-    str_ = c.export()
-    with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
-        f.write(str_)
-
-    # data processing
-    features_dict, labels_dict, add_infos = get_data_anp(configs=c)
-    sampler = Sampler_anp(features_dict, labels_dict, add_infos, configs=c)
-
-    # model & optimizer
-    model = LatentModel(32, sampler.n_features, sampler.n_labels)
-    optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-    load_model(c.outpath, model, optimizer)
-    model.train()
-    model.to(tu.device)
-
-    min_eval_loss = 99999
-    earlystop_count = 0
-    ep = 0
-    base_i = 2500
-    dataset = sampler.get_batch_set(base_i)
-    while ep < c.num_epochs:
-        eval_loss = train_anp(dataset, model, optimizer, is_train=False)
-        if min_eval_loss > eval_loss:
-            model.save_to_optim()
-            min_eval_loss = eval_loss
-            earlystop_count = 0
-        else:
-            earlystop_count += 1
-
-        print("[base_i: {}, ep: {}] eval_loss: {} / count: {}".format(base_i, ep, eval_loss, earlystop_count))
-        if earlystop_count >= 5:
-            model.load_from_optim()
-            plot_functions(c.outpath, ep, base_i + 500, sampler, model)
-
-            min_eval_loss = 99999
-            earlystop_count = 0
-            break
-
-        if ep % 5 == 0:
-            plot_functions(c.outpath, ep, base_i, sampler, model)
-
-        train_loss = train_anp(dataset, model, optimizer, is_train=True)
-        ep += 1
-
-
-def test():
-    adaptive_lrx_l = [2, 5, 10]  # learning rate * 배수
-    use_accum_data_l = [True, False]  # [sampler] 데이터 누적할지 말지
-
-    random_guide_weight_l = [0., 0.2, 0.5, 0.8, 1.]
-    adaptive_loss_wgt_l = [
-        {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.0001}]
-    # adaptive_loss_wgt_l = [{'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.0001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.01}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.1}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.1, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.5, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 1, 'cost': 1., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 100., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 10., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 1., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #
-    #                      , {'y_pf': 0., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 0.2, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 0.5, 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      , {'y_pf': 1., 'mdd_pf': 1000., 'logy': -1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.05, 'cost': 0., 'entropy': 0.001}
-    #                      ]
-    for adaptive_lrx in adaptive_lrx_l:
-        for use_accum_data in use_accum_data_l:
-            for t in [3600, 3000, 1500, ]:
-                for random_guide_weight in random_guide_weight_l:
-                    for adaptive_loss_wgt in adaptive_loss_wgt_l:
-                        name = 'app_adv_5'
-                        c = Configs(name)
-
-                        str_ = c.export()
-                        with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
-                            f.write(str_)
-
-                        c.adaptive_lrx = adaptive_lrx
-                        c.use_accum_data = use_accum_data
-                        c.random_guide_weight = random_guide_weight
-                        c.adaptive_loss_wgt = adaptive_loss_wgt
-
-                        # data processing
-                        features_dict, labels_dict, add_info = get_data(configs=c)
-                        sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
-
-                        # model & optimizer
-                        model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
-                        optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-                        load_model(c.outpath, model, optimizer)
-                        model.train()
-                        model.to(tu.device)
-
-                        train(c, model, optimizer, sampler, t)
-
-# if __name__ == '__main__':
-#     main()
