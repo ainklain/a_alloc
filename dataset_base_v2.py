@@ -216,7 +216,9 @@ class DatasetManagerBase(metaclass=ABCMeta):
         if sampler_type in ['random_sampler', 'random', 'randomsampler']:
             sampler_cls = RandomSampler
             sampler_kwargs = dict(replacement=True)
-
+        elif sampler_type in ['random_without_replacement']:
+            sampler_cls = RandomSampler
+            sampler_kwargs = dict(replacement=False)
         elif sampler_type in ['sequential_sampler', 'sequential', 'sequentialsampler']:
             sampler_cls = SequentialSampler
             sampler_kwargs = dict()
@@ -237,10 +239,15 @@ class DatasetManagerBase(metaclass=ABCMeta):
 
         # mode: train - random sampling with replacement / test - sequential sampling
         sampler_cls, sampler_kwargs = self.get_sampler(params['sampler_type'])
-        sampler = sampler_cls(Subset(self.dataset, mode_range), **sampler_kwargs)
+        sampler = sampler_cls(sub_dataset, **sampler_kwargs)
+
+        if params['batch_size'] == -1:
+            batch_size = len(sub_dataset)
+        else:
+            batch_size = params['batch_size']
 
         # shuffle must be False if sampler exists
-        data_loader = DataLoader(sub_dataset, shuffle=False, sampler=sampler, batch_size=params['batch_size'], **kwargs)
+        data_loader = DataLoader(sub_dataset, shuffle=False, sampler=sampler, batch_size=batch_size, **kwargs)
 
         return data_loader
 

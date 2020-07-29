@@ -53,15 +53,17 @@ class TestDataManager:
 def test_model():
     dm = TestDataManager()
     sample_train = dm.sample('train')
-    x_prev = sample_train['features_prev']
-    x = sample_train['features']
-    y = sample_train['labels']
+    features_prev = sample_train['features_prev']
+    features = sample_train['features']
+    labels = sample_train['labels']
+    labels_prev = sample_train['labels_prev']
 
     ##
     from main_v2 import Configs
     c = Configs('test')
     model = MyModel(len(dm.dm.features_list), len(dm.dm.labels_list), configs=c)
-    out = model.predict(x, x_prev, True, 100)
+    out = model.predict(features, features_prev, True, 100)
+    model.forward_with_loss(features, labels, features_prev=features_prev, labels_prev=labels_prev)
     ##
 
     base_weight = [0.69, 0.3, 0.1, 0.01]
@@ -281,7 +283,7 @@ class AttentiveLatentModel(Module):
         enc_context, enc_self_attn = self.encoder(x, True)
         dec_context, dec_self_attn, dec_cross_attn = self.decoder(x[:, -1:, :], enc_context)
 
-        return dec_context.squeeze()
+        return dec_context.view([len(x), -1])
 
 
 class MyModel(Module):
@@ -305,12 +307,12 @@ class MyModel(Module):
         self.expected_return_estimator = ExpectedReturnEstimator(c.d_model, n_assets, c.hidden_dim)
 
         # allocator
-        self.strategies_allocator = StrategiesAllocator(n_features + n_assets * 3 + c.d_model, n_assets * 2, c.alloc_hidden_dim)
+        self.strategies_allocator = StrategiesAllocator(n_assets * 3 + c.d_model * 2, n_assets * 2, c.alloc_hidden_dim)
 
         self.loss_logvars = torch.nn.Parameter(torch.zeros(len(c.loss_list), dtype=torch.float32, requires_grad=True))
         self.optim_state_dict = self.state_dict()
 
-    def random_guide_weight(self, base_weight, batch_size, is_train, random_r):
+    def random_guide_weight(self, base_weight, batch_size, is_train, random_r=0.):
         with torch.set_grad_enabled(False):
             self.guide_weight = torch.FloatTensor([base_weight])
             if is_train and np.random.rand() <= random_r:
@@ -335,14 +337,14 @@ class MyModel(Module):
         _, pred_mu, pred_sigma = self.expected_return_estimator.run(x_emb[:, -1, :], mc_samples=mc_samples)
 
         # allocation
-        x = torch.cat([pred_mu, pred_sigma, wgt, x, x_attn], dim=-1)
+        x = torch.cat([pred_mu, pred_sigma, wgt, x_emb[:, -1, :], x_attn], dim=-1)
         wgt_mu, wgt_sigma = self.strategies_allocator(x)
 
         return wgt_mu, wgt_sigma, pred_mu, pred_sigma
 
     def predict(self, features, features_prev, is_train, mc_samples):
         c = self.c
-        guide_wgt = self.random_guide_weight(c.base_weight, c.batch_size, is_train, c.random_guide_weight).to(features.dtype)
+        guide_wgt = self.random_guide_weight(c.base_weight, len(features), is_train, c.random_guide_weight).to(features.device)
 
         if features_prev is not None:
             with torch.set_grad_enabled(False):
@@ -377,15 +379,28 @@ class MyModel(Module):
 
         return dist, x, prev_x, pred_mu, pred_sigma, guide_wgt
 
+    def data_dict_to_list(self, data_dict):
+        features = data_dict.get('features')
+        labels = data_dict.get('labels')
+
+        features_prev = data_dict.get('features_prev')
+        labels_prev = data_dict.get('labels_prev')
+
+        return features, labels, features_prev, labels_prev
+
     @profile
-    def forward_with_loss(self, features, labels=None,
-                          mc_samples=1000,
-                          losses_wgt_fixed=None,
-                          features_prev=None,
-                          labels_prev=None,
+    def forward_with_loss(self, data_dict,
+                          mc_samples=None,
                           is_train=True,
+                          losses_wgt_fixed=None,
                           ):
         c = self.c
+
+        if mc_samples is None:
+            mc_samples = c.mc_samples
+
+        features, labels, features_prev, labels_prev = self.data_dict_to_list(data_dict)
+        features, labels, features_prev, labels_prev = tu.to_device(tu.device, [features, labels, features_prev, labels_prev ])
         dist, x, prev_x, pred_mu, pred_sigma, guide_wgt = self.predict(features, features_prev, is_train, mc_samples)
 
         # debugging code (nan value)
@@ -397,7 +412,7 @@ class MyModel(Module):
 
         if labels is not None:
             with torch.set_grad_enabled(False):
-                next_logy = torch.empty_like(labels['logy']).to(tu.device)
+                next_logy = torch.empty_like(labels['logy']).to(labels['logy'].device)
                 next_logy.copy_(labels['logy'])
                 # next_logy = torch.exp(next_logy) - 1.
                 if is_train:
@@ -441,7 +456,10 @@ class MyModel(Module):
                     else:
                         losses_dict[key] = dist.entropy().sum(dim=1).mean()
                 # losses_dict['entropy'] = HLoss()(x)
-                losses_dict[key] = losses_dict[key] / (losses_vars[i_loss] + 1e-6) + 0.5 * self.loss_logvars[i_loss]
+                if losses_wgt_fixed is not None:
+                    losses_dict[key] = losses_dict[key] * losses_wgt_fixed[key]
+                else:
+                    losses_dict[key] = losses_dict[key] / (losses_vars[i_loss] + 1e-6) + 0.5 * self.loss_logvars[i_loss]
 
             for i_dict, key in enumerate(losses_dict.keys()):
                 if i_dict == 0:
@@ -454,13 +472,15 @@ class MyModel(Module):
 
         return x, losses, pred_mu, pred_sigma, losses_dict
 
-    def adversarial_noise(self, features, labels, features_prev=None, labels_prev=None):
+    def adversarial_noise(self, data_dict, losses_wgt_fixed=None):
+
+        features, labels, features_prev, labels_prev = self.data_dict_to_list(data_dict)
+
         features.requires_grad = True
         for key in labels.keys():
             labels[key].requires_grad = True
 
-        pred, losses, _, _, _ = self.forward_with_loss(features, labels, mc_samples=100, losses_wgt_fixed=None,
-                                                       features_prev=features_prev, labels_prev=labels_prev)
+        pred, losses, _, _, _ = self.forward_with_loss(data_dict, mc_samples=100, losses_wgt_fixed=losses_wgt_fixed)
 
         losses.backward(retain_graph=True)
 

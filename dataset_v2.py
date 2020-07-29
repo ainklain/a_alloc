@@ -128,11 +128,24 @@ class DatasetManager(DatasetManagerBase):
             batch_size = self.batch_size
             sampler_type = 'random_sampler'
 
+        elif mode == 'eval':
+            begin_i = 0
+            end_i = int(base_i * 0.9)
+            batch_size = self.batch_size
+            sampler_type = 'random_without_replacement'
+
         elif mode == 'test':
             begin_i = base_i
             end_i = min(base_i + self.test_days, len(self.dataset))
-            batch_size = 1
+            batch_size = -1 # also possible set to len(self.dataset)
             sampler_type = 'sequential_sampler'
+
+        elif mode == 'test_insample':
+            begin_i = 0
+            end_i = min(base_i + self.test_days, len(self.dataset))
+            batch_size = -1 # also possible set to len(self.dataset)
+            sampler_type = 'sequential_sampler'
+
         else:
             raise NotImplementedError
 
