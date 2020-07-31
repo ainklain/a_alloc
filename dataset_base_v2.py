@@ -54,9 +54,11 @@ class AddibleData(AbstractData):
         pass
 
     def transform(self):
-        self.df = transforms_v2.ToNumpy()(self.df)
-        self._transform()
-        self.df = transforms_v2.ToDataFrame(self.idx, self.columns)(self.df)
+        with torch.set_grad_enabled(False):
+            self.df = transforms_v2.ToNumpy()(self.df)
+            self._transform()
+            self.df = transforms_v2.ToDataFrame(self.idx, self.columns)(self.df)
+            self.df.fillna(0)
 
     def __repr__(self):
         return_str = ""
@@ -211,9 +213,9 @@ class DatasetManagerBase(metaclass=ABCMeta):
         return out
 
     def get_sampler(self, sampler_type='random'):
-        print(sampler_type)
+        # print(sampler_type)
         sampler_type = sampler_type.lower()
-        if sampler_type in ['random_sampler', 'random', 'randomsampler']:
+        if sampler_type in ['random_sampler', 'random', 'randomsampler', 'random_with_replacement']:
             sampler_cls = RandomSampler
             sampler_kwargs = dict(replacement=True)
         elif sampler_type in ['random_without_replacement']:

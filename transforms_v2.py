@@ -49,7 +49,7 @@ class RollingMean(Rolling):
         super(RollingMean, self).__init__(window)
 
     def forward(self, x):
-        return self.rolling(np.nanmean, x)
+        return self.rolling(partial(np.nanmean, axis=0), x)
 
 
 class RollingStd(Rolling):
@@ -57,7 +57,7 @@ class RollingStd(Rolling):
         super(RollingStd, self).__init__(window)
 
     def forward(self, x):
-        return self.rolling(partial(np.nanstd, ddof=1), x)
+        return self.rolling(partial(np.nanstd, ddof=1, axis=0), x)
 
 
 class RollingMeanReturn(Rolling):
@@ -81,7 +81,7 @@ class RollingSharpe(Rolling):
         super(RollingSharpe, self).__init__(window)
 
     def forward(self, x):
-        func = lambda x: np.nanmean(x) / np.nanstd(x, ddof=1)
+        func = lambda x: np.nanmean(x, axis=0) / np.nanstd(x, ddof=1, axis=0)
         return self.rolling(func, x)
 
 
@@ -90,7 +90,7 @@ class RollingNormalize(Rolling):
         super(RollingNormalize, self).__init__(window)
 
     def forward(self, x):
-        func = lambda x: ((x - np.nanmean(x)) / np.nanstd(x, ddof=1))[-1, :]
+        func = lambda x: ((x - np.nanmean(x, axis=0)) / np.nanstd(x, ddof=1, axis=0))[-1, :]
         return self.rolling(func, x)
 
 
@@ -117,6 +117,7 @@ class Transforms:
         self.transforms_list = transforms_list
 
     def sequential(self, x):
+
         for transforms_func, suffix in self.transforms_list:
             x = transforms_func(x)
 

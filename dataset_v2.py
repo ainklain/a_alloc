@@ -7,7 +7,7 @@ import transforms_v2
 
 # Data Description
 class AplusData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20200615.txt'):
+    def __init__(self, file_nm='app_data_20200630.txt'):
         super().__init__(file_nm)
         self.label_columns_dict = OrderedDict()
         for feature in ['logy', 'mu', 'sigma']:
@@ -29,7 +29,7 @@ class AplusData(DataFromFiles):
 
 
 class MacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20200615.txt'):
+    def __init__(self, file_nm='macro_data_20200630.txt'):
         super().__init__(file_nm)
         self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
         self.df['spx_dj'] = self.df['spx index'] / self.df['indu index']
@@ -61,7 +61,6 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
 
         if self.pos_embedding:
             self.columns += ['posenc']
-
 
     def label_columns_idx(self, key):
         return [self.columns.index(idx) for idx in self.label_columns_dict[key]]
@@ -122,16 +121,17 @@ class DatasetManager(DatasetManagerBase):
 
         # default range: 전체 데이터 양끝단 못 쓰는 idx 제거 (ie. multistep: [window:-days])
         default_begin_i, default_end_i = self.dataset.default_range
+
         if mode == 'train':
             begin_i = 0
-            end_i = int(base_i * 0.9)
+            end_i = int(base_i * 0.95) - self.dataset.k_days
             batch_size = self.batch_size
             sampler_type = 'random_sampler'
 
         elif mode == 'eval':
             begin_i = 0
-            end_i = int(base_i * 0.9)
-            batch_size = self.batch_size
+            end_i = int(base_i * 0.95) - self.dataset.k_days
+            batch_size = -1
             sampler_type = 'random_without_replacement'
 
         elif mode == 'test':
@@ -155,3 +155,19 @@ class DatasetManager(DatasetManagerBase):
                       sampler_type=sampler_type)
 
         return params
+
+    def get_begin_end_info(self, base_i, mode):
+        assert mode in ['test', 'test_insample']
+        params_base = self.mode_params(base_i, mode)
+        r_ = base_i % self.dataset.k_days
+        # time series dataset index info
+        if mode == 'test':
+            idx_list = [params_base['begin_i'], params_base['end_i']]
+        elif mode == 'test_insample':
+            idx_list = [params_base['begin_i'], int(base_i * 0.9), base_i, params_base['end_i']]
+
+        date_ = list(np.array(self.dataset.idx)[idx_list])
+
+        idx_ = [i - idx_list[0] for i in idx_list]  # re-indexing for sub-dataset
+
+        return dict(date_=date_, idx_=idx_)

@@ -9,9 +9,11 @@ from matplotlib import pyplot as plt, cm
 import GPUtil
 
 
+from logger_v2 import Logger
 from model_v2 import MyModel, load_model, save_model
 from dataset_v2 import DatasetManager, AplusData, MacroData
 import torch_utils as tu
+
 
 # # #### profiler start ####
 import builtins
@@ -23,20 +25,6 @@ except AttributeError:
     builtins.profile = profile
 # # #### profiler end ####
 
-
-def memo():
-    """
-
-    self.adaptive_flag = False
-    l:
-    self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 2., 'entropy': 0.}
-    seed = 100
-    self.use_guide_wgt_as_prev_x = False
-     self.random_label = 0.1
-
-
-    """
-    pass
 
 class Configs:
     def __init__(self, name):
@@ -58,10 +46,10 @@ class Configs:
         self.strategy_days = 250
 
         # adaptive / earlystopping
-        self.adaptive_flag = False
+        self.adaptive_flag = True
         self.adaptive_count = 5
         self.adaptive_lrx = 0.5  # learning rate * 배수
-        self.es_max_count = -1
+        self.es_max_count = 20
         self.adaptive_loss_threshold = None  # -1
 
         self.retrain_days = 240
@@ -96,12 +84,14 @@ class Configs:
 
         self.clip = 1.
 
+        # logger
+        self.log_level = 'DEBUG'
+
         ## attention
         self.d_model = 64
         self.n_heads = 4
         self.d_k = self.d_v = self.d_model // self.n_heads
         self.d_ff = 128
-
 
         ## FiLM
         self.use_condition_network = True
@@ -109,8 +99,8 @@ class Configs:
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0., 'cost': 0., 'entropy': 0.002}
-        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 10., 'logy': 1., 'wgt_guide': 0., 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0.1, 'cost': 0., 'entropy': 0.0}
+        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -127,11 +117,7 @@ class Configs:
     def init_weight(self):
         if self.datatype == 'app':
             self.cash_idx = 3
-            # self.base_weight = [0.7, 0.2, 0.1, 0.0]
-            # self.base_weight = [0.4, 0.15, 0.075, 0.375]
             self.base_weight = [0.25, 0.1, 0.05, 0.6]
-            # self.base_weight = [0.4, 0.3, 0.3, 0.0]
-            # self.base_weight = None
         else:
             self.cash_idx = 0
             self.base_weight = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
@@ -161,466 +147,26 @@ def calc_y(wgt0, y1, cost_r=0.):
     return y, turnover
 
 
-def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=None, mc_samples=100, k_days=20, cost_rate=0.003, suffix='', outpath='./out/', guide_weight=None):
-    """
-    t = 2500
-    dataset_cpu, dataset_ = {}, {}
-    f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
-    dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
-    for key in dataset_cpu.keys():
-        dataset_[key] = deepcopy(dataset_cpu[key][0])
-        dataset_[key] = tu.to_device(tu.device, to_torch(dataset_[key]))
-
-        if key == 'eval':
-            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset_[c.es_type]
-        else:
-            f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset_[key]
-
-    features, labels =  f_dict['test_insample'], l_dict['test_insample']
-    dataset = dataset_['test_insample']
-    dataset2 = dataset_['test']
-    mc_samples=c.mc_samples
-    k_days=c.k_days
-    # outpath=outpath_t
-    cost_rate=c.cost_rate
-    guide_weight=c.base_weight
-    """
-
-    # ep=0; n_samples = 100; k_days = 20; model, features, labels, insample_boundary = main(testmode=True)
-    # features, labels = test_features, test_labels
-    # features, labels = test_insample_features, test_insamples_labels
-    features_prev, labels_prev, features, labels = dataset
-    with torch.set_grad_enabled(False):
-        model.eval()
-        wgt_test, losses_test, pred_mu_test, pred_sigma_test, _ = model.forward_with_loss(features, None, mc_samples=mc_samples,
-                                                                                          features_prev=features_prev,
-                                                                                          labels_prev=labels_prev,
-                                                                                          is_train=False)
-
-    wgt_base = tu.np_ify(features['wgt'])
-    wgt_label = tu.np_ify(labels['wgt'])
-    wgt_result = tu.np_ify(wgt_test)
-    n_asset = wgt_base.shape[1]
-
-    viridis = cm.get_cmap('viridis', n_asset)
-
-    # weight change
-    x = np.arange(len(wgt_base))
-    wgt_base_cum = wgt_base.cumsum(axis=1)
-    fig = plt.figure()
-    fig.suptitle('Weight Diff')
-    # ax1 = fig.add_subplot(311)
-    ax1 = fig.add_subplot(211)
-    ax1.set_title('base')
-    for i in range(n_asset):
-        if i == 0:
-            ax1.fill_between(x, 0, wgt_base_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-        else:
-            ax1.fill_between(x, wgt_base_cum[:, i-1], wgt_base_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-    wgt_result_cum = wgt_result.cumsum(axis=1)
-    # ax2 = fig.add_subplot(312)
-    ax2 = fig.add_subplot(212)
-    ax2.set_title('result')
-    for i in range(n_asset):
-        if i == 0:
-            ax2.fill_between(x, 0, wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-        else:
-            ax2.fill_between(x, wgt_result_cum[:, i-1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-    # wgt_label_cum = wgt_label.cumsum(axis=1)
-    # ax3 = fig.add_subplot(313)
-    # ax1 = fig.add_subplot(313)
-    # ax3.set_title('label')
-    # for i in range(n_asset):
-    #     if i == 0:
-    #         ax3.fill_between(x, 0, wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-    #     else:
-    #         ax3.fill_between(x, wgt_label_cum[:, i-1], wgt_label_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-    if insample_boundary is not None:
-        ax1.axvline(insample_boundary[0])
-        ax1.axvline(insample_boundary[1])
-
-        ax2.axvline(insample_boundary[0])
-        ax2.axvline(insample_boundary[1])
-
-        # ax3.axvline(insample_boundary[0])
-        # ax3.axvline(insample_boundary[1])
-
-        ax1.text(x[0], ax1.get_ylim()[1], guide_date[0]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax1.text(insample_boundary[0], ax1.get_ylim()[1], guide_date[1]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax2.text(insample_boundary[1], ax1.get_ylim()[1], guide_date[2]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax2.text(x[-1], ax1.get_ylim()[1], guide_date[3]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-
-    fig.savefig(os.path.join(outpath, '{}_test_wgt_{}.png'.format(ep, suffix)))
-    plt.close(fig)
-
-    # #######################
-    idx_list = sampler.add_infos['idx_list']
-    if insample_boundary is not None:
-        # test_insample에서 test시점의 날짜 기준으로 맞추는 작업
-        r_ = insample_boundary[1] % k_days
-        date_ = sampler.date_[(sampler.date_ >= guide_date[0]) & (sampler.date_ < guide_date[-1])]
-    else:
-        r_ = 0
-        date_ = sampler.date_[(sampler.date_ >= guide_date[-2]) & (sampler.date_ < guide_date[-1])]
-
-    y_next = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[r_::k_days, :]
-    wgt_base_calc = wgt_base[r_::k_days, :]
-    wgt_result_calc = wgt_result[r_::k_days, :]
-    wgt_label_calc = wgt_label[r_::k_days, :]
-
-    # constraint
-    const_wgt = (wgt_result_calc >= np.array(guide_weight) / 2)
-    const_multiplier = (1 - (np.array(guide_weight) / 2 * ~const_wgt).sum(axis=1, keepdims=True)) / (wgt_result_calc * const_wgt).sum(axis=1, keepdims=True)
-    wgt_result_const_calc = wgt_result_calc * const_wgt * const_multiplier + np.array(guide_weight) / 2 * ~const_wgt
-
-    # features, labels = test_features, test_labels; wgt = wgt_result
-    # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
-    active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
-
-    y_base = np.insert(np.sum((1+y_next) * wgt_base_calc, axis=1), 0, 1.)
-    y_port = np.insert(np.sum((1+y_next) * wgt_result_calc, axis=1), 0, 1.)
-    y_port_const = np.insert(np.sum((1+y_next) * wgt_result_const_calc, axis=1), 0, 1.)
-    y_label = np.insert(np.sum((1+y_next) * wgt_label_calc, axis=1), 0, 1.)
-    y_eq = np.insert(np.mean(1+y_next, axis=1), 0, 1.)
-
-    y_base_with_c, turnover_base = calc_y(wgt_base_calc, y_next, cost_rate)
-    y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
-    y_port_const_with_c, turnover_port_const = calc_y(wgt_result_const_calc, y_next, cost_rate)
-    y_label_with_c, turnover_label = calc_y(wgt_label_calc, y_next, cost_rate)
-    y_guide_with_c, turnover_guide = calc_y(np.array(guide_weight)[np.newaxis, :].repeat(len(wgt_result_calc), axis=0),
-                                            y_next, cost_rate)
-
-    if guide_weight is not None:
-        y_guide = np.insert(np.sum((1+y_next) * np.array(guide_weight), axis=1), 0, 1.)
-    else:
-        y_guide = y_eq
-
-    x = np.arange(len(y_base))
-
-    # save data
-    df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
-
-    date_test_selected = ((date_[r_::k_days] >= guide_date[-2]) & (date_[r_::k_days] < guide_date[-1]))
-    date_selected = list(date_)[r_::k_days]
-
-    columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_wgt_const' for idx_nm in idx_list] + [idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']
-    df = pd.DataFrame(data=np.concatenate([wgt_result_calc, wgt_result_const_calc, y_next,
-                    y_port_with_c['before_cost'][1:, np.newaxis], y_port_const_with_c['before_cost'][1:, np.newaxis], y_label_with_c['before_cost'][1:, np.newaxis],
-                    y_port_with_c['after_cost'][1:, np.newaxis], y_port_const_with_c['after_cost'][1:, np.newaxis], y_label_with_c['after_cost'][1:, np.newaxis]
-                    ], axis=-1),
-                      index=date_selected
-                      , columns=columns)
-
-    df_all = df.loc[:, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
-    df_test = df.loc[date_test_selected, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
-    df_stats = pd.concat({'mu_all': df_all.mean() * 12,
-                       'sig_all': df_all.std(ddof=1) * np.sqrt(12),
-                       'sr_all': df_all.mean() / df_all.std(ddof=1) * np.sqrt(12),
-                       'mu_test': df_test.mean() * 12,
-                       'sig_test': df_test.std(ddof=1) * np.sqrt(12),
-                       'sr_test': df_test.mean() / df_test.std(ddof=1) * np.sqrt(12)},
-                      axis=1)
-
-    print(ep, suffix, '\n', df_stats)
-    df.to_csv(os.path.join(outpath, '{}_all_data_{}.csv'.format(ep, suffix)))
-    df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
-    df_wgt.to_csv(os.path.join(outpath, '{}_wgtdaily_{}.csv'.format(ep, suffix)))
-
-    # ################ together
-
-    fig = plt.figure()
-    ax1 = fig.add_subplot(211)
-    # ax = plt.gca()
-    l_port, = ax1.plot(x, y_port.cumprod())
-    l_port_const, = ax1.plot(x, y_port_const.cumprod())
-    l_eq, = ax1.plot(x, y_eq.cumprod())
-    l_guide, = ax1.plot(x, y_guide.cumprod())
-    ax1.legend(handles=(l_port, l_port_const, l_eq, l_guide), labels=('port', 'port_const', 'eq', 'guide'))
-
-    ax2 = fig.add_subplot(212)
-    l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
-    l_portconst_guide, = ax2.plot(x, (1 + y_port_const - y_guide).cumprod() - 1.)
-    # l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
-    l_port_guide_ac, = ax2.plot(x, (1 + y_port_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
-    l_portconst_guide_ac, = ax2.plot(x, (1 + y_port_const_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
-    ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_guide_ac, l_portconst_guide_ac),
-               labels=('port-guide', 'portconst-guide', 'port-guide(ac)', 'portconst-guide(ac)'))
-    # ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
-    #            labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
-
-    if insample_boundary is not None:
-        ax1.axvline(insample_boundary[0] / k_days)
-        ax1.axvline(insample_boundary[1] / k_days)
-        ax2.axvline(insample_boundary[0] / k_days)
-        ax2.axvline(insample_boundary[1] / k_days)
-
-        ax1.text(x[0], ax1.get_ylim()[1], guide_date[0]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax1.text(insample_boundary[0] // k_days, ax1.get_ylim()[1], guide_date[1]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax2.text(insample_boundary[1] // k_days, ax2.get_ylim()[1], guide_date[2]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax2.text(x[-1], ax2.get_ylim()[1], guide_date[3]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-    else:
-        ax1.text(x[0], ax1.get_ylim()[1], guide_date[2]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-        ax1.text(x[-1], ax1.get_ylim()[1], guide_date[3]
-                 , horizontalalignment='center'
-                 , verticalalignment='center'
-                 , bbox=dict(facecolor='white', alpha=0.7))
-
-
-    fig.savefig(os.path.join(outpath, '{}_test_y_{}.png'.format(ep, suffix)))
-    plt.close(fig)
-
-
-    # # ##################### seperate
-    # fig = plt.figure()
-    # ax = plt.gca()
-    # # l_base, = plt.plot(x, y_base.cumprod())
-    # l_port, = plt.plot(x, y_port.cumprod())
-    # # l_label, = plt.plot(x, y_label.cumprod())
-    # l_eq, = plt.plot(x, y_eq.cumprod())
-    # l_guide, = plt.plot(x, y_guide.cumprod())
-    # plt.legend(handles=(l_port, l_eq, l_guide), labels=('port', 'eq', 'guide'))
-    # # plt.legend(handles=(l_base, l_port, l_label, l_eq, l_guide), labels=('base', 'port', 'label', 'eq', 'guide'))
-    # if insample_boundary is not None:
-    #     plt.axvline(insample_boundary[0] / k_days)
-    #     plt.axvline(insample_boundary[1] / k_days)
-    #
-    #     plt.text(x[0], ax.get_ylim()[1], guide_date[0]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #
-    # fig.savefig(os.path.join(outpath, 'test_y_{}{}.png'.format(ep, suffix)))
-    # plt.close(fig)
-    #
-    # fig = plt.figure()
-    # ax = plt.gca()
-    # l_port_guide, = plt.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
-    # l_port_eq, = plt.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
-    # # l_port_base, = plt.plot(x, y_port - y_base)
-    # # l_port_eq, = plt.plot(x, y_port - y_eq)
-    # # l_label_base, = plt.plot(x, y_label - y_base)
-    # # l_label_guide, = plt.plot(x, y_label - y_guide)
-    #
-    # # plt.legend(handles=(l_port_guide), labels=('port-guide'))
-    # plt.legend(handles=(l_port_guide, l_port_eq), labels=('port-guide', 'port-eq'))
-    #
-    # # plt.legend(handles=(l_port_guide, l_port_base, l_port_eq, l_label_base, l_label_guide), labels=('port-guide','port-base', 'port-eq', 'label-base', 'label-guide'))
-    # if insample_boundary is not None:
-    #     plt.axvline(insample_boundary[0] / k_days)
-    #     plt.axvline(insample_boundary[1] / k_days)
-    #
-    #     plt.text(x[0], ax.get_ylim()[1], guide_date[0]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(insample_boundary[0] // k_days, ax.get_ylim()[1], guide_date[1]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(insample_boundary[1] // k_days, ax.get_ylim()[1], guide_date[2]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #     plt.text(x[-1], ax.get_ylim()[1], guide_date[3]
-    #              , horizontalalignment='center'
-    #              , verticalalignment='center'
-    #              , bbox=dict(facecolor='white', alpha=0.7))
-    #
-    # fig.savefig(os.path.join(outpath, 'test_y_diff_{}{}.png'.format(ep, suffix)))
-    # plt.close(fig)
-
-    # fig = plt.figure()
-    # plt.plot(x[:-1], active_share)
-    # fig.savefig(os.path.join(outpath, 'test_activeshare_{}{}.png'.format(ep, suffix)))
-    # plt.close(fig)
-
-
-def plot(wgt_base, wgt_result, y_df_before, y_df_after, outpath='./out/', suffix=""):
-
-    n_asset = wgt_base.shape[1]
-    viridis = cm.get_cmap('viridis', n_asset)
-
-    # weight change
-    x = np.arange(len(wgt_base))
-    wgt_base_cum = wgt_base.cumsum(axis=1)
-    fig = plt.figure()
-    fig.suptitle('Weight Diff')
-    ax1 = fig.add_subplot(211)
-    for i in range(n_asset):
-        if i == 0:
-            ax1.fill_between(x, 0, wgt_base_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-        else:
-            ax1.fill_between(x, wgt_base_cum[:, i-1], wgt_base_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-    wgt_result_cum = wgt_result.cumsum(axis=1)
-    ax2 = fig.add_subplot(212)
-    for i in range(n_asset):
-        if i == 0:
-            ax2.fill_between(x, 0, wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-        else:
-            ax2.fill_between(x, wgt_result_cum[:, i-1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-    fig.savefig(os.path.join(outpath, 'test_wgt{}.png'.format(suffix)))
-    plt.close(fig)
-
-    # features, labels = test_features, test_labels; wgt = wgt_result
-    # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
-
-    fig = plt.figure()
-    y_df_before.index = pd.to_datetime(y_df_before.index)
-    plt.plot((1 + y_df_before).cumprod(axis=0))
-    plt.legend(labels=y_df_before.columns)
-
-    plt.yscale('log')
-    fig.savefig(os.path.join(outpath, 'test_y_before{}.png'.format(suffix)))
-    plt.close(fig)
-
-    fig = plt.figure()
-    y_df_after.index = pd.to_datetime(y_df_after.index)
-    plt.plot((1 + y_df_after).cumprod(axis=0))
-    plt.legend(labels=y_df_after.columns)
-
-    plt.yscale('log')
-    fig.savefig(os.path.join(outpath, 'test_y_after{}.png'.format(suffix)))
-    plt.close(fig)
-
-
-def backtest(configs, sampler, suffix=""):
-    c = configs
-
-    wgt_base = np.zeros([sampler.max_len - c.base_i0, sampler.n_labels])
-    wgt_result = np.zeros_like(wgt_base)
-
-    # 20 days
-    n_datapoint = c.retrain_days // c.k_days
-    d, r = divmod(sampler.max_len - c.base_i0, c.retrain_days)
-
-    y_next = np.zeros([d * n_datapoint + r // c.k_days + 1, sampler.n_labels])
-    wgt_base_calc = np.zeros_like(y_next)
-    wgt_result_calc = np.zeros_like(y_next)
-    wgt_label_calc = np.zeros_like(y_next)
-
-    wgt_date = list()
-
-    # model & optimizer
-    model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
-    optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-    model.to(tu.device)
-
-    ii = 0
-    for t in range(c.base_i0, sampler.max_len, c.retrain_days):
-        _, _, (dataset, _), _, _ = sampler.get_batch(t)
-        features_prev, labels_prev, features, labels = tu.to_device(tu.device, to_torch(dataset))
-
-        outpath_t = os.path.join(c.outpath, str(t)+suffix)
-        load_model(outpath_t, model, optimizer)
-
-        with torch.set_grad_enabled(False):
-            model.eval()
-            wgt_test, _, _, _, _ = model.forward_with_loss(features, None, mc_samples=c.mc_samples, loss_wgt=None,
-                                                           features_prev=features_prev,
-                                                           labels_prev=labels_prev,
-                                                           is_train=False)
-
-        wgt_result[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(wgt_test)[:c.retrain_days, :]
-        wgt_base[(t-c.base_i0):(t-c.base_i0+c.retrain_days), :] = tu.np_ify(features['wgt'])[:c.retrain_days, :]
-
-        y_next[ii:(ii + n_datapoint), :] = tu.np_ify(torch.exp(labels['logy_for_calc'])-1.)[::c.k_days, :][:n_datapoint, :]
-        wgt_base_calc[ii:(ii + n_datapoint), :] = tu.np_ify(features['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
-        wgt_label_calc[ii:(ii + n_datapoint), :] = tu.np_ify(labels['wgt'])[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
-
-        wgt_result_calc[ii:(ii + n_datapoint), :] = tu.np_ify(wgt_test)[::c.k_days, :][:n_datapoint, :] # [:c.retrain_days:c.k_days, :]
-        wgt_date += list(sampler.add_infos['date'][t::c.k_days][:n_datapoint])
-        # schedule = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=10, last_epoch=-1)
-        ii += n_datapoint
-
-    wgt_df = pd.DataFrame(data=wgt_result_calc, index=wgt_date, columns=sampler.add_infos['idx_list'])
-    wgt_df.to_csv(os.path.join(c.outpath, 'wgt{}.csv'.format(suffix)))
-    y_date = wgt_date[:] + [sampler.add_infos['date'][-1]]
-
-    active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
-
-    y_base, turnover_base = calc_y(wgt_base_calc, y_next, c.cost_rate)
-    y_port, turnover_port = calc_y(wgt_result_calc, y_next, c.cost_rate)
-    y_label, turnover_label = calc_y(wgt_label_calc, y_next, c.cost_rate)
-    y_eq, turnover_eq = calc_y(np.repeat(np.ones([1, sampler.n_labels], dtype=np.float32) / sampler.n_labels, len(wgt_base_calc), axis=0), y_next, c.cost_rate)
-    if c.base_weight is not None:
-        y_guide, turnover_guide = calc_y(np.repeat(np.array([c.base_weight]), len(wgt_base_calc), axis=0), y_next, c.cost_rate)
-    else:
-        y_guide, turnover_guide = y_eq, turnover_eq
-
-    y_df_before = pd.DataFrame(data={'base': y_base['before_cost'],
-                              'port': y_port['before_cost'],
-                              'label': y_label['before_cost'],
-                              'eq': y_eq['before_cost'],
-                              'guide': y_guide['before_cost']}, index=y_date)
-    y_df_before.to_csv(os.path.join(c.outpath, 'y_before_cost{}.csv'.format(suffix)))
-
-    y_df_after = pd.DataFrame(data={'base': y_base['after_cost'],
-                              'port': y_port['after_cost'],
-                              'label': y_label['after_cost'],
-                              'eq': y_eq['after_cost'],
-                              'guide': y_guide['after_cost']}, index=y_date)
-    y_df_after.to_csv(os.path.join(c.outpath, 'y_after_cost{}.csv'.format(suffix)))
-
-    plot(wgt_base, wgt_result, y_df_before, y_df_after, c.outpath, suffix)
-
-
 class Trainer:
-    def __init__(self, c, model, optimizer, dataset_manager):
+    def __init__(self, c, dataset_manager):
         self.c = c
-        self.model = model
-        self.optimizer = optimizer
         self.dataset_manager = dataset_manager
+        self.loss_logger = Logger(self.__class__.__name__)
 
+        self.reset_model()
         self.set_adaptive_configs(c.adaptive_flag)
+
+    def reset_model(self):
+        c = self.c
+        dm = self.dataset_manager
+        self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
+
+        self.model.to(tu.device)
 
     def make_dir(self, t):
         c = self.c
-        outpath_t = os.path.join(c.outpath, str(t))
-        # if os.path.isdir(outpath_t):
+        outpath_t = os.path.join(c.outpath, str(t))     # if os.path.isdir(outpath_t):
         r = re.compile("{}+".format(t))
         n = len(list(filter(r.match, os.listdir(c.outpath))))   # 동일 t 폴더 개수
         if n > 0:
@@ -634,6 +180,10 @@ class Trainer:
         str_ = c.export()
         with open(os.path.join(outpath_t, 'c.txt'), 'w') as f:
             f.write(str_)
+
+        self.loss_logger.set_handler(c.log_level, 'loss_log', outpath=outpath_t, use_stream_handler=True)
+
+        return outpath_t
 
     def check_earlystopping(self, losses_eval):
         if losses_eval > self.min_eval_loss:
@@ -650,7 +200,7 @@ class Trainer:
 
     def set_adaptive_configs(self, adaptive_flag):
         c = self.c
-        self.min_eval_loss = 987654321
+        self.min_eval_loss = float('inf')
         self.es_count = 0
 
         if adaptive_flag:
@@ -666,26 +216,56 @@ class Trainer:
 
     def run(self, t, use_plot=True):
         c = self.c
-        self.make_dir(t)
+        outpath_t = self.make_dir(t)
+
+        losses_train = losses_eval = losses_test = float('inf')
+        losses_dict = {'train': np.zeros([c.num_epochs]), 'eval': np.zeros([c.num_epochs]), 'test': np.zeros([c.num_epochs])}
 
         adaptive_flag = self.set_adaptive_configs(c.adaptive_flag)
         for ep in range(c.num_epochs):
             if ep % c.eval_freq == 0:
                 losses_eval, early_stopped = self.eval(t, ep)
+                # evaluate
+                print('\n')
+                self.loss_logger.info('ep: {} [es: {}/{} / min:{}] - train: {:.3f} / eval: {:.3f} / test: {:.3f}'.format(
+                    ep, self.es_count, self.max_count, self.min_eval_loss, losses_train, losses_eval, losses_test))
+                # GPUtil.showUtilization()
                 if early_stopped and not adaptive_flag:
-                    print('early stopped')
+                    self.model.load_from_optim()
+                    self.loss_logger.info('early stopped')
                     break
-
-                # adaptive flag is True only if not early stopped and adaptive_flag else False
-                # i.e., if early stopped then change parameters and set adaptive flag to False
-                adaptive_flag = self.set_adaptive_configs(not early_stopped and adaptive_flag)
+                elif early_stopped and adaptive_flag:
+                    # if adaptive_flag, reset to False and corresponding parameters
+                    adaptive_flag = self.set_adaptive_configs(False)
+                else:
+                    assert not early_stopped
 
             if ep % c.plot_freq == 0:
-                losses_test, data_for_plot = self.test(t, use_plot=True, is_insample=True)
+                # test
+                losses_test, data_for_plot = self.test(t, is_insample=True)
+
                 if use_plot:
-                    self.plot(ep, data_for_plot)
+
+                    suffix = "[tr={:.2f}][ev={:.2f}][te={:.2f}]".format(losses_train, losses_eval, losses_test)
+
+                    date_dict = self.dataset_manager.get_begin_end_info(t, 'test_insample')
+                    data_for_plot.update(date_dict)
+                    self.plot(ep, data_for_plot, outpath_t, suffix=suffix)
+
+                    losses_dict['train'][ep] = losses_train
+                    losses_dict['eval'][ep] = losses_eval
+                    losses_dict['test'][ep] = losses_test
+                    self.plot_learnig_curve(ep, outpath_t, losses_dict)
 
             losses_train = self.train(t)
+
+        if use_plot:
+            for mode in ['test_insample', 'test']:
+                is_insample = True if mode == 'test_insample' else False
+                losses_test, data_for_plot = self.test(t, is_insample=is_insample)
+                date_dict = self.dataset_manager.get_begin_end_info(t, mode)
+                data_for_plot.update(date_dict)
+                self.plot(20000, data_for_plot, outpath_t, suffix=mode)
 
     def train(self, t):
         self.model.train()
@@ -730,7 +310,7 @@ class Trainer:
         # run model for all data to evaluate model
         with torch.set_grad_enabled(False):
             for data_dict in dataloader:
-                _, losses, _, _, _ = self.model.forward_with_loss(data_dict, losses_wgt_fixed=self.losses_wgt_fixed)
+                _, losses, _, _, losses_dict = self.model.forward_with_loss(data_dict, is_train=False, losses_wgt_fixed=self.losses_wgt_fixed)
 
                 losses_np = tu.np_ify(losses)
                 losses_sum += float(losses_np)
@@ -739,21 +319,30 @@ class Trainer:
 
         early_stopped = self.check_earlystopping(losses_sum) if ep >= c.n_pretrain * c.eval_freq else False
 
+        print_str = "[eval] "
+        for key, val in losses_dict.items():
+            print_str += '{}:{:.3f} / '.format(key, tu.np_ify(val))
+        self.loss_logger.info(print_str)
+
         return losses_sum, early_stopped
 
     def test(self, t, is_insample=False):
         self.model.eval()
         c = self.c
 
+        # get dataloader
         mode = 'test_insample' if is_insample else 'test'
         dataloader = self.dataset_manager.get_data_loader(t, mode)
 
         losses_sum = 0
+
+        # run model for all data to evaluate model
         with torch.set_grad_enabled(False):
+            # store predicted wgts and t+1 returns of assets
             wgt = torch.zeros(len(dataloader.dataset), len(self.dataset_manager.labels_list)).to(tu.device)
             next_y = torch.zeros_like(wgt)
             for i, data_dict in enumerate(dataloader):
-                wgt_i, losses, _, _, _ = self.model.forward_with_loss(data_dict, losses_wgt_fixed=self.losses_wgt_fixed)
+                wgt_i, losses, _, _, _ = self.model.forward_with_loss(data_dict, is_train=False, losses_wgt_fixed=self.losses_wgt_fixed)
                 guide_wgt = self.model.random_guide_weight(c.base_weight, len(wgt), False).to(wgt_i.device)
                 assert len(wgt) == len(wgt_i)
                 wgt[:] = wgt_i[:]
@@ -765,64 +354,57 @@ class Trainer:
             data_for_plot = dict(wgt=tu.np_ify(wgt), guide_wgt=tu.np_ify(guide_wgt), next_y=tu.np_ify(next_y))
         return losses_sum, data_for_plot
 
-    def plot(self, next_y, wgt, guide_wgt):
-        wgt = tu.np_ify(wgt)
-        guide_wgt = tu.np_ify(guide_wgt)
-        n_asset = wgt.shape[1]
+    def plot(self, ep, data_for_plot: dict, outpath, suffix=''):
+        c = self.c
 
-        viridis = cm.get_cmap('viridis', n_asset)
+        k_days = c.k_days
+        cost_rate = c.cost_rate
+        wgt_result = tu.np_ify(data_for_plot['wgt'])
+        wgt_guide = tu.np_ify(data_for_plot['guide_wgt'])
+        n_asset = wgt_result.shape[1]
 
         idx_list = [idx.split('_')[0] for idx in self.dataset_manager.labels_list]
+        date_list = np.array(self.dataset_manager.dataset.idx)
+        date_ = date_list[(date_list >= data_for_plot['date_'][0]) & (date_list < data_for_plot['date_'][-1])]
 
-        if insample_boundary is not None:
+        if len(data_for_plot['idx_']) == 4:
+            # test_insample: [train_begin, train_end, test_begin, test_end]
             # test_insample에서 test시점의 날짜 기준으로 맞추는 작업
-            r_ = insample_boundary[1] % k_days
-            date_ = sampler.date_[(sampler.date_ >= guide_date[0]) & (sampler.date_ < guide_date[-1])]
+            selected_sampling = np.arange(data_for_plot['idx_'][2] % k_days, len(wgt_result), k_days)
         else:
-            r_ = 0
-            date_ = sampler.date_[(sampler.date_ >= guide_date[-2]) & (sampler.date_ < guide_date[-1])]
+            # test: [test_begin, test_end]
+            selected_sampling = np.arange(0, len(wgt_result), k_days)
 
-        y_next = tu.np_ify(torch.exp(labels['logy_for_calc']) - 1.)[r_::k_days, :]
-        wgt_base_calc = wgt_base[r_::k_days, :]
-        wgt_result_calc = wgt_result[r_::k_days, :]
-        wgt_label_calc = wgt_label[r_::k_days, :]
+        y_next = data_for_plot['next_y'][selected_sampling, :]
+        wgt_result_calc = wgt_result[selected_sampling, :]
+        wgt_guide_calc = wgt_guide[selected_sampling, :]
 
-        # constraint
-        const_wgt = (wgt_result_calc >= np.array(guide_weight) / 2)
-        const_multiplier = (1 - (np.array(guide_weight) / 2 * ~const_wgt).sum(axis=1, keepdims=True)) / (
-                    wgt_result_calc * const_wgt).sum(axis=1, keepdims=True)
-        wgt_result_const_calc = wgt_result_calc * const_wgt * const_multiplier + np.array(guide_weight) / 2 * ~const_wgt
+        # min weight constraint (bigger than half of guide weight)
+        is_bigger_than_half = (wgt_result_calc >= wgt_guide_calc / 2)
+        const_multiplier = (1 - (wgt_guide_calc / 2 * ~is_bigger_than_half).sum(axis=1, keepdims=True)) / (
+                    wgt_result_calc * is_bigger_than_half).sum(axis=1, keepdims=True)
+        wgt_result_const_calc = wgt_result_calc * is_bigger_than_half * const_multiplier + wgt_guide_calc / 2 * ~is_bigger_than_half
 
         # features, labels = test_features, test_labels; wgt = wgt_result
         # active_share = np.sum(np.abs(wgt_result - wgt_base), axis=1)
-        active_share = np.sum(np.abs(wgt_result_calc - wgt_base_calc), axis=1)
+        active_share = np.sum(np.abs(wgt_result_calc - wgt_guide_calc), axis=1)
 
-        y_base = np.insert(np.sum((1 + y_next) * wgt_base_calc, axis=1), 0, 1.)
+        y_guide = np.insert(np.sum((1 + y_next) * wgt_guide_calc, axis=1), 0, 1.)
         y_port = np.insert(np.sum((1 + y_next) * wgt_result_calc, axis=1), 0, 1.)
         y_port_const = np.insert(np.sum((1 + y_next) * wgt_result_const_calc, axis=1), 0, 1.)
-        y_label = np.insert(np.sum((1 + y_next) * wgt_label_calc, axis=1), 0, 1.)
         y_eq = np.insert(np.mean(1 + y_next, axis=1), 0, 1.)
 
-        y_base_with_c, turnover_base = calc_y(wgt_base_calc, y_next, cost_rate)
         y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
         y_port_const_with_c, turnover_port_const = calc_y(wgt_result_const_calc, y_next, cost_rate)
-        y_label_with_c, turnover_label = calc_y(wgt_label_calc, y_next, cost_rate)
-        y_guide_with_c, turnover_guide = calc_y(
-            np.array(guide_weight)[np.newaxis, :].repeat(len(wgt_result_calc), axis=0),
-            y_next, cost_rate)
+        y_guide_with_c, turnover_guide = calc_y(wgt_guide_calc, y_next, cost_rate)
 
-        if guide_weight is not None:
-            y_guide = np.insert(np.sum((1 + y_next) * np.array(guide_weight), axis=1), 0, 1.)
-        else:
-            y_guide = y_eq
-
-        x = np.arange(len(y_base))
+        x = np.arange(len(y_guide))
 
         # save data
         df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
-        date_test_selected = ((date_[r_::k_days] >= guide_date[-2]) & (date_[r_::k_days] < guide_date[-1]))
-        date_selected = list(date_)[r_::k_days]
+        date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
+        date_selected = date_[selected_sampling]
 
         columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_wgt_const' for idx_nm in idx_list] + [
             idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac',
@@ -830,10 +412,10 @@ class Trainer:
         df = pd.DataFrame(data=np.concatenate([wgt_result_calc, wgt_result_const_calc, y_next,
                                                y_port_with_c['before_cost'][1:, np.newaxis],
                                                y_port_const_with_c['before_cost'][1:, np.newaxis],
-                                               y_label_with_c['before_cost'][1:, np.newaxis],
+                                               y_guide_with_c['before_cost'][1:, np.newaxis],
                                                y_port_with_c['after_cost'][1:, np.newaxis],
                                                y_port_const_with_c['after_cost'][1:, np.newaxis],
-                                               y_label_with_c['after_cost'][1:, np.newaxis]
+                                               y_guide_with_c['after_cost'][1:, np.newaxis],
                                                ], axis=-1),
                           index=date_selected
                           , columns=columns)
@@ -877,34 +459,34 @@ class Trainer:
         # ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
         #            labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
 
-        if insample_boundary is not None:
-            ax1.axvline(insample_boundary[0] / k_days)
-            ax1.axvline(insample_boundary[1] / k_days)
-            ax2.axvline(insample_boundary[0] / k_days)
-            ax2.axvline(insample_boundary[1] / k_days)
+        if len(data_for_plot['idx_']) == 4:
+            ax1.axvline(data_for_plot['idx_'][1] // k_days)
+            ax1.axvline(data_for_plot['idx_'][2] // k_days)
+            ax2.axvline(data_for_plot['idx_'][1] // k_days)
+            ax2.axvline(data_for_plot['idx_'][2] // k_days)
 
-            ax1.text(x[0], ax1.get_ylim()[1], guide_date[0]
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
-            ax1.text(insample_boundary[0] // k_days, ax1.get_ylim()[1], guide_date[1]
+            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(insample_boundary[1] // k_days, ax2.get_ylim()[1], guide_date[2]
+            ax2.text(data_for_plot['idx_'][2] // k_days, ax2.get_ylim()[1], data_for_plot['date_'][2]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(x[-1], ax2.get_ylim()[1], guide_date[3]
+            ax2.text(x[-1], ax2.get_ylim()[1], data_for_plot['date_'][3]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
         else:
-            ax1.text(x[0], ax1.get_ylim()[1], guide_date[2]
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
-            ax1.text(x[-1], ax1.get_ylim()[1], guide_date[3]
+            ax1.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][1]
                      , horizontalalignment='center'
                      , verticalalignment='center'
                      , bbox=dict(facecolor='white', alpha=0.7))
@@ -912,223 +494,85 @@ class Trainer:
         fig.savefig(os.path.join(outpath, '{}_test_y_{}.png'.format(ep, suffix)))
         plt.close(fig)
 
+        # #############################
+
+        viridis = cm.get_cmap('viridis', n_asset)
+
+        x = np.arange(len(wgt_result_calc))
+        wgt_result_cum = wgt_result_calc.cumsum(axis=1)
+        wgt_guide_cum = wgt_guide_calc.cumsum(axis=1)
+        fig = plt.figure()
+        fig.suptitle('Weight Diff')
+        # ax1 = fig.add_subplot(311)
+        ax1 = fig.add_subplot(211)
+        ax1.set_title('base')
+        for i in range(n_asset):
+            if i == 0:
+                ax1.fill_between(x, 0, wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+            else:
+                ax1.fill_between(x, wgt_result_cum[:, i - 1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+
+        # ax2 = fig.add_subplot(312)
+        ax2 = fig.add_subplot(212)
+        ax2.set_title('result')
+        for i in range(n_asset):
+            if i == 0:
+                ax2.fill_between(x, 0, wgt_guide_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+            else:
+                ax2.fill_between(x, wgt_guide_cum[:, i - 1], wgt_guide_cum[:, i], facecolor=viridis.colors[i],
+                                 alpha=.7)
+
+        if len(data_for_plot['idx_']) == 4:
+            ax1.axvline(data_for_plot['idx_'][1] // k_days)
+            ax1.axvline(data_for_plot['idx_'][2] // k_days)
+
+            ax2.axvline(data_for_plot['idx_'][1] // k_days)
+            ax2.axvline(data_for_plot['idx_'][2] // k_days)
+
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(data_for_plot['idx_'][2] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][2]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][3]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+
+        fig.savefig(os.path.join(outpath, '{}_test_wgt_{}.png'.format(ep, suffix)))
+        plt.close(fig)
+
+    def plot_learnig_curve(self, ep, outpath, losses_dict):
+        c = self.c
+        ##############################
+        x_plot = np.arange(c.num_epochs)
+        x_len = (ep // 10000 + 1) * 10000
+        sampling_freq = (ep // 10000 + 1) * 1000
+        fig = plt.figure()
+        l_train, = plt.plot(x_plot[1:x_len], losses_dict['train'][1:x_len])
+        l_eval, = plt.plot(x_plot[1:x_len], losses_dict['eval'][1:x_len])
+        loss_test = np.zeros_like(losses_dict['test'][:x_len])
+        loss_test[::sampling_freq] = losses_dict['test'][:x_len][::sampling_freq]
+        l_test, = plt.plot(x_plot[1:x_len], loss_test[1:])
+
+        plt.legend(handles=(l_train, l_eval, l_test), labels=('train', 'eval', 'test'))
+
+        fig.savefig(os.path.join(outpath, 'learning_curve.png'))
+        plt.close(fig)
+
     def run_all(self):
         c = self.c
         iter_ = range(c.base_i0, self.dataset_manager.max_len, c.retrain_days)
         for t in iter_:
+            self.reset_model()
             self.run(t)
-
-
-
-def train(configs, model, optimizer, dataset_manager, t=None):
-    c = configs
-
-
-    for t in iter_:
-        # ################ config in loop ################
-
-        adaptive_flag = c.init_loop()
-        loss_wgt = deepcopy(c.loss_wgt)
-
-        x_plot = np.arange(c.num_epochs)
-        losses_dict = {'train': np.zeros([c.num_epochs]), 'eval': np.zeros([c.num_epochs]), 'test': np.zeros([c.num_epochs])}
-
-        if c.model_init_everytime:
-            # ################ model & optimizer in loop  # load 무시, 매 타임 초기화 ################
-            model = MyModel(len(dataset_manager.features_list), len(dataset_manager.labels_list), configs=c)
-            model.train()
-            model.to(tu.device)
-
-            optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-        else:
-            model.train()
-            # if t > t0:  # 최초 한번만 가이드 따라가기
-            #     c.adaptive_count = 0
-            #     c.n_pretrain = 0
-
-        # schedule = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=c.lr, max_lr=1e-2, gamma=1, last_epoch=-1)
-        # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1/10, last_epoch=-1)
-
-        # ################ data processing in loop ################
-        dataset = {}
-        for key in ['train', 'eval', 'test']:
-            dataset[key] = dataset_manager.get_data_loader(t, key)
-        #
-        # dataset_cpu, dataset = {}, {}
-        # f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
-        # dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
-        # for key in dataset_cpu.keys():
-        #     dataset[key] = deepcopy(dataset_cpu[key][0])
-        #     dataset[key] = tu.to_device(tu.device, to_torch(dataset[key]))
-        #
-        #     if key == 'eval':
-        #         f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[c.es_type]
-        #     else:
-        #         f_prev_dict[key], l_prev_dict[key], f_dict[key], l_dict[key] = dataset[key]
-
-        # eval_features_prev, eval_features, eval_labels = dataset[c.es_type]
-        # test_features_prev, test_features, test_labels = dataset['test']
-        # testin_features_prev, testin_features, testin_labels = dataset['test_insample']
-
-        loss_threshold = c.loss_threshold
-        for ep in range(c.num_epochs):
-            # if ep > 0:
-            #     print(losses_train_np, losses_eval, losses_test)
-            if ep % c.eval_freq == 0:
-                model.eval()
-                with torch.set_grad_enabled(False):
-                    _, losses_eval, _, _, losses_eval_dict = model.forward_with_loss(f_dict['eval'], l_dict['eval']
-                                                                                     , mc_samples=c.mc_samples
-                                                                                     , losses_wgt_fixed=loss_wgt
-                                                                                     , features_prev=f_prev_dict['eval']
-                                                                                     , labels_prev=l_prev_dict['eval'])
-
-                    losses_eval = tu.np_ify(losses_eval)
-
-                    losses_dict['eval'][ep] = float(losses_eval)
-
-                if ep >= c.n_pretrain * c.eval_freq:
-                    if losses_eval > c.min_eval_loss:
-                        c.es_count += 1
-                    else:
-                        model.save_to_optim()
-                        c.min_eval_loss = losses_eval
-                        c.es_count = 0
-
-                str_ = "(es_count:{} / min_loss:{}) ".format(c.es_count, c.min_eval_loss)
-                for i_loss, key in enumerate(c.loss_list):
-                    str_ += "{}: l{:2.2f} w{:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key])), tu.np_ify(model.loss_logvars[i_loss]))
-
-                # for key in losses_eval_dict.keys():
-                #     str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * loss_wgt[key]))
-
-                _, losses_test, _, _, loss_test_dict = model.forward_with_loss(f_dict['test'], l_dict['test']
-                                                                               , mc_samples=c.mc_samples
-                                                                               , losses_wgt_fixed=loss_wgt
-                                                                               , features_prev=f_prev_dict['test']
-                                                                               , labels_prev=l_prev_dict['test']
-                                                                               , is_train=False)
-
-                losses_dict['test'][ep] = float(losses_test)
-                save_model(outpath_t, ep, model, optimizer)
-                suffix = "_e[{:2.2f}]test[{:2.2f}]_es[{}]".format(losses_eval, losses_test, c.es_count)
-                if ep % (c.plot_freq * c.eval_freq) == 0:
-                    GPUtil.showUtilization()
-                    plot_each(ep, sampler, model, dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
-                              , insample_boundary=insample_boundary
-                              , guide_date=guide_date
-                              , mc_samples=c.mc_samples
-                              , k_days=c.k_days
-                              , cost_rate=c.cost_rate
-                              , suffix=suffix
-                              , outpath=outpath_t
-                              , guide_weight=c.base_weight)
-
-                    plot_each(ep, sampler, model, dataset['test']  # f_dict['test_insample'], l_dict['test_insample']
-                              , guide_date=guide_date
-                              , mc_samples=c.mc_samples
-                              , k_days=c.k_days
-                              , cost_rate=c.cost_rate
-                              , suffix=suffix + "_{}_test".format(t)
-                              , outpath=outpath_t
-                              , guide_weight=c.base_weight)
-
-                if ep > 0 and ep % (c.plot_freq * c.eval_freq) == 0:
-                    x_len = (ep // 10000 + 1) * 10000
-                    sampling_freq = (ep // 10000 + 1) * 1000
-                    fig = plt.figure()
-                    l_train, = plt.plot(x_plot[1:x_len], losses_dict['train'][1:x_len])
-                    l_eval, = plt.plot(x_plot[1:x_len], losses_dict['eval'][1:x_len])
-                    loss_test = np.zeros_like(losses_dict['test'][:x_len])
-                    loss_test[::sampling_freq] = losses_dict['test'][:x_len][::sampling_freq]
-                    l_test, = plt.plot(x_plot[1:x_len], loss_test[1:])
-
-                    plt.legend(handles=(l_train, l_eval, l_test), labels=('train', 'eval', 'test'))
-
-                    fig.savefig(os.path.join(outpath_t, 'learning_curve_{}.png'.format(t)))
-                    plt.close(fig)
-
-                # if adaptive_flag and c.es_count >= c.adaptive_count:
-                if adaptive_flag and ((loss_threshold is not None and losses_eval < loss_threshold) or c.es_count >= c.adaptive_count):
-                    print('[changed] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
-                    adaptive_flag = False
-                    loss_threshold = c.adaptive_loss_threshold
-                    optimizer.param_groups[0]['lr'] = c.lr * c.adaptive_lrx
-                    # optimizer.param_groups[0]['lr'] = c.lr * 10
-
-                    c.es_max = c.es_max_count
-                    c.es_count = 0;
-                    c.min_eval_loss = 99999
-
-                    for key in losses_eval_dict.keys():
-                        if c.adaptive_loss_wgt[key] >= 0:
-                            loss_wgt[key] = c.adaptive_loss_wgt[key]
-
-                        if loss_wgt[key] == 0:
-                            continue
-
-                        val = np.abs(tu.np_ify(losses_eval_dict[key]))
-                        if loss_wgt[key] < 0 and val > 10:
-                            # if val > 10:
-                            loss_wgt[key] = 10. / float(val * abs(loss_wgt[key]))
-
-                    continue
-
-                if (loss_threshold is not None and losses_eval < loss_threshold) or (c.es_max > 0 and c.es_count >= c.es_max):
-                    print('[stopped] {} {} e {:3.2f} / {}'.format(t, ep, losses_eval, str_))
-                    break
-
-            train_dataloader = data_loader(dataset_cpu['train'], batch_size=c.batch_size, shuffle=True)
-            for i_loop, (train_f_prev, train_l_prev, train_f, train_l) in enumerate(train_dataloader):
-                """
-                train_f_prev, train_l_prev, train_f, train_l = next(iter(train_dataloader))
-                """
-                train_f_prev, train_l_prev, train_f, train_l = tu.to_device(tu.device, [train_f_prev, train_l_prev, train_f, train_l])
-
-                if c.adv_train is True:
-                    train_f = model.adversarial_noise(train_f, train_l, features_prev=train_f_prev, labels_prev=train_l_prev)
-
-                _, losses_train, _, _, losses_train_dict = model.forward_with_loss(train_f, train_l
-                                                                   , mc_samples=c.mc_samples
-                                                                   , losses_wgt_fixed=loss_wgt
-                                                                   , features_prev=train_f_prev
-                                                                   , labels_prev=train_l_prev)
-
-                # schedule.step()
-                losses_train_np = tu.np_ify(losses_train)
-                losses_dict['train'][ep] += float(losses_train_np)
-
-                optimizer.zero_grad()
-                losses_train.backward()
-
-                torch.nn.utils.clip_grad_norm_(model.parameters(), c.clip)
-                optimizer.step()
-
-                if ep % 20 == 0:
-                    str_train = "ep: {} iloop: {} train_loss: {} / ".format(ep, i_loop, losses_train_np)
-                    for key in losses_train_dict.keys():
-                        str_train += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_train_dict[key]) * c.loss_wgt[key]))
-
-                    print(str_train)
-
-            if ep % c.eval_freq == 0:
-                print('{} {} t {:3.2f} / e {:3.2f} / {}'.format(t, ep, losses_dict['train'][ep], losses_eval, str_))
-
-        model.eval()
-        model.load_from_optim()
-        plot_each(c.num_epochs + 20000, sampler, model,  dataset['test_insample']  # f_dict['test_insample'], l_dict['test_insample']
-                  , insample_boundary=insample_boundary, guide_date=guide_date
-                  , mc_samples=c.mc_samples, k_days=c.k_days
-                  , cost_rate=c.cost_rate
-                  , suffix=suffix + "_{}".format(t), outpath=outpath_t
-                  , guide_weight=c.base_weight)
-
-        plot_each(c.num_epochs + 20000, sampler, model,  dataset['test'] #  f_dict['test'], l_dict['test']
-                  , guide_date=guide_date
-                  , mc_samples=c.mc_samples, k_days=c.k_days
-                  , cost_rate=c.cost_rate
-                  , suffix=suffix + "_{}_test".format(t), outpath=outpath_t
-                  , guide_weight=c.base_weight)
 
 
 testmode = False
@@ -1149,9 +593,9 @@ def main(testmode=False):
     # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
         # for key in ['m','l','h','eq',]:
     for seed, suffix in zip([100], ["_0"]):
-        for key in ['l']:
+        for key in ['l', 'm', 'h', 'eq']:
             # configs & variables
-            name = 'attn01_{}'.format(key)
+            name = 'attn03_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
@@ -1172,16 +616,14 @@ def main(testmode=False):
             data_list = [AplusData(), MacroData()]
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
-
-            # model & optimizer
-            model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
-            optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
-            load_model(c.outpath, model, optimizer)
-            model.train()
-            model.to(tu.device)
-
-            trainer = Trainer(c, model, optimizer, dm)
-            train(c, model, optimizer, dm, 3489)
+            trainer = Trainer(c, dm)
+            trainer.run_all()
+            # trainer.run(3489)
+            # train(c, model, optimizer, dm, 3489)
             # train(c, model, optimizer, sampler, t=1700)
 
-            backtest(c, sampler, suffix)
+            # backtest(c, sampler, suffix)
+
+
+if __name__ == '__main__':
+    main()

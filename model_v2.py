@@ -4,11 +4,11 @@ from collections import OrderedDict
 import os
 import numpy as np
 import torch
-from torch import nn
+from torch import nn, distributions
 from torch.nn import init, Module, functional as F
 import layer
 from torch.distributions import Categorical
-import torch.distributions as dist
+
 
 import torch_utils as tu
 
@@ -208,9 +208,7 @@ class ExpectedReturnEstimator(Module):
         """
         mask = self.training or sample
         n_samples, batch_size, _ = x.shape
-        for i in range(len(self.hidden_layers)):
-            h_layer, bn = self.hidden_layers[i], self.hidden_bn[i]
-
+        for h_layer, bn in zip(self.hidden_layers, self.hidden_bn):
             x = h_layer(x)
             x = bn(x.view(-1, bn.num_features)).view(n_samples, batch_size, bn.num_features)
             x = F.leaky_relu(x)
@@ -304,6 +302,7 @@ class MyModel(Module):
         self.attentive_model = AttentiveLatentModel(c.d_k, c.d_v, c.d_model, c.d_ff, c.n_heads, c.dropout_r)
 
         # mc dropout model
+        # self.expected_return_estimator = ExpectedReturnEstimator(n_features, n_assets, c.hidden_dim)
         self.expected_return_estimator = ExpectedReturnEstimator(c.d_model, n_assets, c.hidden_dim)
 
         # allocator
@@ -334,6 +333,7 @@ class MyModel(Module):
         x_attn = self.attentive_model(x_emb)
 
         # expected return estimation
+        # _, pred_mu, pred_sigma = self.expected_return_estimator.run(x[:, -1, :], mc_samples=mc_samples)
         _, pred_mu, pred_sigma = self.expected_return_estimator.run(x_emb[:, -1, :], mc_samples=mc_samples)
 
         # allocation
@@ -366,7 +366,7 @@ class MyModel(Module):
         # cash 제한 풀기
         noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
         wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True),
-                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
+                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device) + 1e-3)
         wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
 
         wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
@@ -429,7 +429,6 @@ class MyModel(Module):
                 next_y = torch.exp(next_logy) - 1.
 
             losses_dict = dict()
-            losses_wgt_dict = dict()
             # losses_dict['y_pf'] = -(x * labels['logy']).sum()
 
             losses_vars = torch.exp(self.loss_logvars)
@@ -461,11 +460,9 @@ class MyModel(Module):
                 else:
                     losses_dict[key] = losses_dict[key] / (losses_vars[i_loss] + 1e-6) + 0.5 * self.loss_logvars[i_loss]
 
-            for i_dict, key in enumerate(losses_dict.keys()):
-                if i_dict == 0:
-                    losses = losses_dict[key]
-                else:
-                    losses += losses_dict[key]
+            losses = torch.tensor(0, dtype=torch.float32).to(labels['logy'].device)
+            for key in losses_dict.keys():
+                losses += losses_dict[key]
         else:
             losses = None
             losses_dict = None
@@ -843,10 +840,10 @@ class FiLM(nn.Module):
         return x
 
 
-class LogUniform(dist.TransformedDistribution):
+class LogUniform(distributions.TransformedDistribution):
     def __init__(self, lb, ub):
-        super(LogUniform, self).__init__(dist.Uniform(lb.log(), ub.log()),
-                                         dist.ExpTransform())
+        super(LogUniform, self).__init__(distributions.Uniform(lb.log(), ub.log()),
+                                         distributions.ExpTransform())
 
 
 class ConditionNetwork(Module):
