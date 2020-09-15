@@ -132,7 +132,8 @@ def test_model():
     dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
     is_train = True
     if is_train:
-        pred = dist.rsample().clamp(0.01, 0.99)
+        # pred = dist.rsample().clamp(0.01, 0.99)
+        pred = (wgt_mu + torch.randn_like(wgt_sigma) * wgt_sigma).clamp(0.01, 0.99) # reparameterization trick
         pred = pred / (pred.sum(-1, keepdim=True) + 1e-6)
     else:
         pred = wgt_mu
@@ -305,8 +306,8 @@ class MyModel(Module):
         # self.expected_return_estimator = ExpectedReturnEstimator(n_features, n_assets, c.hidden_dim)
         self.expected_return_estimator = ExpectedReturnEstimator(c.d_model, n_assets, c.hidden_dim)
 
-        # allocator
-        self.strategies_allocator = StrategiesAllocator(n_assets * 3 + c.d_model * 2, n_assets * 2, c.alloc_hidden_dim)
+        # allocator (non-cash only)
+        self.strategies_allocator = StrategiesAllocator(n_assets * 3 + c.d_model * 2, (n_assets-1) * 2, c.alloc_hidden_dim)
 
         self.loss_logvars = torch.nn.Parameter(torch.zeros(len(c.loss_list), dtype=torch.float32, requires_grad=True))
         self.optim_state_dict = self.state_dict()
@@ -342,42 +343,46 @@ class MyModel(Module):
 
         return wgt_mu, wgt_sigma, pred_mu, pred_sigma
 
+    def noncash_to_all(self, wgt_, wgt_guide):
+        c = self.c
+        noncash_idx = np.delete(np.arange(wgt_guide.shape[1]), c.cash_idx)
+
+        wgt_ = wgt_.clamp(-0.99, 0.99)
+        wgt_ = (1. + wgt_) * wgt_guide[:, noncash_idx]
+        wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True),
+                           torch.zeros(wgt_.shape[0], 1, device=wgt_.device))
+
+        wgt_ = torch.cat([wgt_, wgt_rf], dim=-1) + 1e-3
+        wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
+        return wgt_
+
     def predict(self, features, features_prev, is_train, mc_samples):
         c = self.c
-        guide_wgt = self.random_guide_weight(c.base_weight, len(features), is_train, c.random_guide_weight).to(features.device)
+        wgt_guide = self.random_guide_weight(c.base_weight, len(features), is_train, c.random_guide_weight).to(features.device)
 
-        if features_prev is not None:
-            with torch.set_grad_enabled(False):
+        with torch.set_grad_enabled(False):
+            if features_prev is not None:
                 # prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
-                prev_x, _, _, _ = self.forward(features_prev, guide_wgt, mc_samples)
-                prev_x = (1. + prev_x) * guide_wgt
-                prev_x = prev_x / (prev_x.sum(-1, keepdim=True) + 1e-6)
-        else:
-            prev_x = guide_wgt
+                wgt_prev, _, _, _ = self.forward(features_prev, wgt_guide, mc_samples)
+                wgt_prev = self.noncash_to_all(wgt_prev, wgt_guide)
+            else:
+                wgt_prev = wgt_guide
 
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
         if c.use_guide_wgt_as_prev_x is True:
-            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, guide_wgt, mc_samples)
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, wgt_guide, mc_samples)
         else:
-            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, prev_x, mc_samples)
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma = self.forward(features, wgt_prev, mc_samples)
 
-        wgt_mu = (1. + wgt_mu) * guide_wgt
-
-        # cash 제한 풀기
-        noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
-        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True),
-                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device) + 1e-3)
-        wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
-
-        wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
         dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
         if is_train:
-            x = dist.rsample().clamp(0.01, 0.99)
-            x = x / (x.sum(-1, keepdim=True) + 1e-6)
+            # wgt_ = dist.rsample()
+            wgt_ = wgt_mu + torch.randn_like(wgt_sigma) * wgt_sigma # reparameterization trick
         else:
-            x = wgt_mu
+            wgt_ = wgt_mu
 
-        return dist, x, prev_x, pred_mu, pred_sigma, guide_wgt
+        wgt_ = self.noncash_to_all(wgt_, wgt_guide)
+        return dist, wgt_, wgt_prev, pred_mu, pred_sigma, wgt_guide
 
     def data_dict_to_list(self, data_dict):
         features = data_dict.get('features')
@@ -405,8 +410,8 @@ class MyModel(Module):
 
         # debugging code (nan value)
         if torch.isnan(x).sum() > 0:
-            for n, p in list(self.named_parameters()):
-                print(n, '\nval:\n', p, '\ngrad:\n', p.grad)
+        #     for n, p in list(self.named_parameters()):
+        #         print(n, '\nval:\n', p, '\ngrad:\n', p.grad)
 
             return False
 
@@ -477,7 +482,12 @@ class MyModel(Module):
         for key in labels.keys():
             labels[key].requires_grad = True
 
-        pred, losses, _, _, _ = self.forward_with_loss(data_dict, mc_samples=100, losses_wgt_fixed=losses_wgt_fixed)
+        forward_result = self.forward_with_loss(data_dict, mc_samples=100, losses_wgt_fixed=losses_wgt_fixed)
+
+        if forward_result is False:
+            return False
+
+        pred, losses, _, _, _ = forward_result
 
         losses.backward(retain_graph=True)
 
@@ -820,9 +830,6 @@ def load_model(path, model, optimizer):
     return checkpoint['ep']
 
 
-
-
-
 class FiLM(nn.Module):
     """
     A Feature-wise Linear Modulation Layer from
@@ -890,7 +897,7 @@ class MyModel_film(Module):
 
         self.expected_return_estimator = ExpectedReturnEstimator(in_dim, out_dim, configs)
 
-        self.strategies_allocator = StrategiesAllocator(in_dim + out_dim * 3, out_dim * 2, configs)
+        self.strategies_allocator = StrategiesAllocator(in_dim + out_dim * 3, (out_dim-1) * 2, configs)
 
         self.optim_state_dict = self.state_dict()
 
@@ -949,35 +956,35 @@ class MyModel_film(Module):
         if features_prev is not None:
             with torch.set_grad_enabled(False):
                 # prev_x, _, _ = self.run(features_prev, features['wgt'], n_samples)
-                prev_x, _, _, _, _ = self.forward(features_prev, guide_wgt, mc_samples)
-                prev_x = (1. + prev_x) * guide_wgt
-                prev_x = prev_x / (prev_x.sum(-1, keepdim=True) + 1e-6)
+                prev_wgt, _, _, _, _ = self.forward(features_prev, guide_wgt, mc_samples)
+                prev_wgt = (1. + prev_wgt) * guide_wgt
+                prev_wgt = prev_wgt / (prev_wgt.sum(-1, keepdim=True) + 1e-6)
         else:
-            prev_x = guide_wgt
+            prev_wgt = guide_wgt
 
         # x, pred_mu, pred_sigma = self.run(features, prev_x, n_samples)
         if c.use_guide_wgt_as_prev_x is True:
             wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt = self.forward(features, guide_wgt, mc_samples)
         else:
-            wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt = self.forward(features, prev_x, mc_samples)
+            wgt_mu, wgt_sigma, pred_mu, pred_sigma, losses_wgt = self.forward(features, prev_wgt, mc_samples)
 
-        wgt_mu = (1. + wgt_mu) * guide_wgt
-
-        # cash 제한 풀기
-        noncash_idx = np.delete(np.arange(wgt_mu.shape[1]), c.cash_idx)
-        wgt_mu_rf = torch.max(1 - wgt_mu[:, noncash_idx].sum(-1, keepdim=True),
-                              torch.zeros(wgt_mu.shape[0], 1, device=wgt_mu.device))
-        wgt_mu = torch.cat([wgt_mu[:, noncash_idx], wgt_mu_rf], dim=-1)
-
-        wgt_mu = wgt_mu / (wgt_mu.sum(-1, keepdim=True) + 1e-6)
         dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
         if is_train:
-            x = dist.rsample().clamp(0.01, 0.99)
-            x = x / (x.sum(-1, keepdim=True) + 1e-6)
+            wgt_ = dist.rsample().clamp(0.01, 0.99)
+            wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
         else:
-            x = wgt_mu
+            wgt_ = wgt_mu
 
-        return dist, x, prev_x, pred_mu, pred_sigma, guide_wgt, losses_wgt
+        # cash 제한 풀기
+        noncash_idx = np.delete(np.arange(guide_wgt.shape[1]), c.cash_idx)
+        wgt_ = (1. + wgt_) * guide_wgt[:, noncash_idx]
+
+        wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True),
+                              torch.zeros(wgt_.shape[0], 1, device=wgt_.device))
+        wgt_ = torch.cat([wgt_, wgt_rf], dim=-1)
+
+        wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
+        return dist, wgt_, prev_wgt, pred_mu, pred_sigma, guide_wgt, losses_wgt
 
     @profile
     def forward_with_loss(self, features, labels=None,

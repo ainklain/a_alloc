@@ -2,16 +2,17 @@ from copy import deepcopy
 import random
 import re
 import os
+import torch
 import numpy as np
 import pandas as pd
-import torch
+
 from matplotlib import pyplot as plt, cm
 import GPUtil
 
 
 from logger_v2 import Logger
 from model_v2 import MyModel, load_model, save_model
-from dataset_v2 import DatasetManager, AplusData, MacroData
+from dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData
 import torch_utils as tu
 
 
@@ -29,17 +30,16 @@ except AttributeError:
 class Configs:
     def __init__(self, name):
         self.comment = """
-        wgt_mu = 0.5 + 0.99 * torch.tanh(wgt_mu) + 1e-6
-        wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
+        non_cash only
         """
 
         self.seed = 1000
         self.name = name
-        self.lr = 1e-3
+        self.lr = 1e-4
         self.batch_size = 256
         self.num_epochs = 1000
         self.base_i0 = 2000
-        self.mc_samples = 200
+        self.mc_samples = 1000
         self.sampling_freq = 20
         self.k_days = 20
         self.label_days = 20
@@ -47,8 +47,8 @@ class Configs:
 
         # adaptive / earlystopping
         self.adaptive_flag = True
-        self.adaptive_count = 5
-        self.adaptive_lrx = 0.5  # learning rate * 배수
+        self.adaptive_count = 10
+        self.adaptive_lrx = 5  # learning rate * 배수
         self.es_max_count = 20
         self.adaptive_loss_threshold = None  # -1
 
@@ -76,7 +76,7 @@ class Configs:
 
         self.hidden_dim = [72, 48, 32]
         self.alloc_hidden_dim = [32, 32]
-        self.dropout_r = 0.3
+        self.dropout_r = 0.5
 
         self.random_guide_weight = 0.1
         self.random_flip = 0.1  # flip sign
@@ -207,10 +207,12 @@ class Trainer:
             self.max_count = c.adaptive_count
             self.optimizer.param_groups[0]['lr'] = c.lr * c.adaptive_lrx
             self.losses_wgt_fixed = c.adaptive_loss_wgt
+            self.use_n_batch_per_epoch = True
         else:
             self.max_count = c.es_max_count
             self.optimizer.param_groups[0]['lr'] = c.lr
             self.losses_wgt_fixed = c.loss_wgt
+            self.use_n_batch_per_epoch = False
 
         return adaptive_flag
 
@@ -242,20 +244,21 @@ class Trainer:
 
             if ep % c.plot_freq == 0:
                 # test
-                losses_test, data_for_plot = self.test(t, is_insample=True)
 
-                if use_plot:
+                for mode in ['test_insample', 'test']:
+                    is_insample = True if mode == 'test_insample' else False
+                    losses_test, data_for_plot = self.test(t, is_insample=is_insample)
 
-                    suffix = "[tr={:.2f}][ev={:.2f}][te={:.2f}]".format(losses_train, losses_eval, losses_test)
+                    if use_plot:
+                        suffix = "[tr={:.2f}][ev={:.2f}][te={:.2f}]".format(losses_train, losses_eval, losses_test)
+                        date_dict = self.dataset_manager.get_begin_end_info(t, mode)
+                        data_for_plot.update(date_dict)
+                        self.plot(ep, data_for_plot, outpath_t, suffix=suffix + mode)
 
-                    date_dict = self.dataset_manager.get_begin_end_info(t, 'test_insample')
-                    data_for_plot.update(date_dict)
-                    self.plot(ep, data_for_plot, outpath_t, suffix=suffix)
-
-                    losses_dict['train'][ep] = losses_train
-                    losses_dict['eval'][ep] = losses_eval
-                    losses_dict['test'][ep] = losses_test
-                    self.plot_learnig_curve(ep, outpath_t, losses_dict)
+                losses_dict['train'][ep] = losses_train
+                losses_dict['eval'][ep] = losses_eval
+                losses_dict['test'][ep] = losses_test
+                self.plot_learnig_curve(ep, outpath_t, losses_dict)
 
             losses_train = self.train(t)
 
@@ -273,7 +276,12 @@ class Trainer:
 
         # get dataloader
         dataloader = self.dataset_manager.get_data_loader(t, 'train')
-        n_batch_per_epoch = len(dataloader.dataset) // c.batch_size
+
+        # adaptive batching (when converge to guide then use epoch, else just sampled batch)
+        if self.use_n_batch_per_epoch:
+            n_batch_per_epoch = len(dataloader.dataset) // c.batch_size
+        else:
+            n_batch_per_epoch = 1
 
         losses_sum = 0
         for it_, data_dict in enumerate(dataloader):
@@ -294,6 +302,7 @@ class Trainer:
             self.optimizer.zero_grad()
             losses.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), c.clip)
+            # print([(n, x.grad) for n, x in list(self.model.named_parameters())])
             self.optimizer.step()
 
         return losses_sum
@@ -333,7 +342,6 @@ class Trainer:
         # get dataloader
         mode = 'test_insample' if is_insample else 'test'
         dataloader = self.dataset_manager.get_data_loader(t, mode)
-
         losses_sum = 0
 
         # run model for all data to evaluate model
@@ -365,7 +373,7 @@ class Trainer:
 
         idx_list = [idx.split('_')[0] for idx in self.dataset_manager.labels_list]
         date_list = np.array(self.dataset_manager.dataset.idx)
-        date_ = date_list[(date_list >= data_for_plot['date_'][0]) & (date_list < data_for_plot['date_'][-1])]
+        date_ = date_list[(date_list >= data_for_plot['date_'][0]) & (date_list <= data_for_plot['date_'][-1])]
 
         if len(data_for_plot['idx_']) == 4:
             # test_insample: [train_begin, train_end, test_begin, test_end]
@@ -575,6 +583,43 @@ class Trainer:
             self.run(t)
 
 
+def income():
+    base_weight = dict(h=[0.8, 0.2],
+                       m=[0.6, 0.4],
+                       l=[0.45, 0.55],
+                       eq=[0.5, 0.5])
+
+    for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
+        for key in ['l','m','h','eq',]:
+    # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
+    #     for key in ['m']:
+            # configs & variables
+            name = 'income01_k20_{}'.format(key)
+            # name = 'app_adv_1'
+            c = Configs(name)
+            c.base_weight = base_weight[key]
+            c.seed = seed
+            c.cash_idx = 1
+            # seed
+            random.seed(c.seed)
+            np.random.seed(c.seed)
+            torch.manual_seed(c.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+            str_ = c.export()
+            with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
+                f.write(str_)
+
+            # data processing
+
+            data_list = [IncomeData(), MacroData()]
+            dm = DatasetManager(data_list, c.test_days, c.batch_size)
+
+            trainer = Trainer(c, dm)
+            trainer.run_all()
+
+
 testmode = False
 @profile
 def main(testmode=False):
@@ -584,18 +629,19 @@ def main(testmode=False):
                        m=[0.45, 0.15, 0.075, 0.325],
                        l=[0.30, 0.1, 0.05, 0.55],
                        eq=[0.25, 0.25, 0.25, 0.25])
+                       
     # 검증
     # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
     #                    m=[0.4, 0.15, 0.075, 0.375],
     #                    l=[0.25, 0.1, 0.05, 0.6],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
-    # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-        # for key in ['m','l','h','eq',]:
-    for seed, suffix in zip([100], ["_0"]):
-        for key in ['l', 'm', 'h', 'eq']:
+    for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
+        for key in ['l','m','h','eq',]:
+    # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
+    #     for key in ['m']:
             # configs & variables
-            name = 'attn03_{}'.format(key)
+            name = 'attn_0914_02_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]
@@ -617,8 +663,8 @@ def main(testmode=False):
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
             trainer = Trainer(c, dm)
-            trainer.run_all()
-            # trainer.run(3489)
+            # trainer.run_all()
+            trainer.run(3900)
             # train(c, model, optimizer, dm, 3489)
             # train(c, model, optimizer, sampler, t=1700)
 
@@ -627,3 +673,4 @@ def main(testmode=False):
 
 if __name__ == '__main__':
     main()
+    # income()

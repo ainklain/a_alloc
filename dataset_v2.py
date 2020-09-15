@@ -6,8 +6,9 @@ import transforms_v2
 
 
 # Data Description
+
 class AplusData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20200630.txt'):
+    def __init__(self, file_nm='app_data_20200831.txt'):
         super().__init__(file_nm)
         self.label_columns_dict = OrderedDict()
         for feature in ['logy', 'mu', 'sigma']:
@@ -15,6 +16,10 @@ class AplusData(DataFromFiles):
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
+            # (transforms_v2.RollingLogReturn(5), 'logy'),
+            # (transforms_v2.RollingLogReturn(20), 'logy20'),
+            # (transforms_v2.RollingLogReturn(60), 'logy60'),
+            # (transforms_v2.RollingLogReturn(120), 'logy120'),
             (transforms_v2.RollingLogReturn(20), 'logy'),
             (transforms_v2.RollingLogReturn(60), 'logy60'),
             (transforms_v2.RollingLogReturn(120), 'logy120'),
@@ -28,8 +33,13 @@ class AplusData(DataFromFiles):
             reduce='concat')
 
 
+class IncomeData(AplusData):
+    def __init__(self, file_nm='income_data_20200820.txt'):
+        super(IncomeData, self).__init__(file_nm)
+
+
 class MacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20200630.txt'):
+    def __init__(self, file_nm='macro_data_20200914.txt'):
         super().__init__(file_nm)
         self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
         self.df['spx_dj'] = self.df['spx index'] / self.df['indu index']
@@ -75,7 +85,6 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
         return arr
 
     def __getitem__(self, i):
-
         out = {'features_prev': self.arr[max(0, i - self.window - self.sampling_days):(i + 1 - self.sampling_days)][self.adj::self.sampling_days],
                'features':  self.arr[max(0, i - self.window):(i + 1)][self.adj::self.sampling_days]}
 
@@ -84,13 +93,20 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
 
         # for sequential
         labels_prev_base = self.arr[(i + 1 - self.sampling_days):(i + self.k_days + 2 - self.sampling_days)][::self.sampling_days, :]
-        labels_base = self.arr[(i+1):(i + self.k_days + 2)][::self.sampling_days, :]
 
         # -1 : for spot  (for seq, use ':')
         out['labels_prev'] = dict([(key, labels_prev_base[-1, self.label_columns_idx(key)])
                                    for key in self.label_columns_dict.keys()])
-        out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
-                              for key in self.label_columns_dict.keys()])
+
+        if i >= self.default_range[1] or i < self.default_range[0]: # very recent data
+            out['labels'] = out['labels_prev'] # dummy. not used. 
+            # out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
+            #                       for key in self.label_columns_dict.keys()])
+        else:
+            labels_base = self.arr[(i+1):(i + self.k_days + 2)][::self.sampling_days, :]
+            # print(i, labels_base.shape)
+            out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
+                                  for key in self.label_columns_dict.keys()])
 
         return out
 
@@ -119,7 +135,8 @@ class DatasetManager(DatasetManagerBase):
 
     def mode_params(self, base_i, mode):
 
-        # default range: 전체 데이터 양끝단 못 쓰는 idx 제거 (ie. multistep: [window:-days])
+        # default range: 전체 데이터 양끝단 못 쓰는 idx 제거 (ie. multistep: [window:-k_days])
+        # => 수정: 마지막 k_days는 가능케끔 하고 label=None처리
         default_begin_i, default_end_i = self.dataset.default_range
 
         if mode == 'train':
@@ -139,6 +156,7 @@ class DatasetManager(DatasetManagerBase):
             end_i = min(base_i + self.test_days, len(self.dataset))
             batch_size = -1 # also possible set to len(self.dataset)
             sampler_type = 'sequential_sampler'
+            # default_end_i = end_i
 
         elif mode == 'test_insample':
             begin_i = 0
@@ -150,7 +168,7 @@ class DatasetManager(DatasetManagerBase):
             raise NotImplementedError
 
         params = dict(begin_i=max(default_begin_i, begin_i),
-                      end_i=min(default_end_i, end_i),
+                      end_i=end_i,
                       batch_size=batch_size,
                       sampler_type=sampler_type)
 
@@ -162,9 +180,9 @@ class DatasetManager(DatasetManagerBase):
         r_ = base_i % self.dataset.k_days
         # time series dataset index info
         if mode == 'test':
-            idx_list = [params_base['begin_i'], params_base['end_i']]
+            idx_list = [params_base['begin_i'], params_base['end_i']-1]
         elif mode == 'test_insample':
-            idx_list = [params_base['begin_i'], int(base_i * 0.9), base_i, params_base['end_i']]
+            idx_list = [params_base['begin_i'], int(base_i * 0.9), base_i, params_base['end_i']-1]
 
         date_ = list(np.array(self.dataset.idx)[idx_list])
 

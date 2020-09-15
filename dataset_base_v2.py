@@ -159,11 +159,18 @@ class DatasetForMultiTimesteps(DatasetForTimeSeriesBase):
         self.window = window
         self.adj = window % self.sampling_days
         self.default_range = [self.window + self.sampling_days, len(self.idx) - self.k_days]
+        # self.default_range = [self.window + self.sampling_days, len(self.idx)]
 
     def __getitem__(self, i):
+        if i >= self.default_range[1] or i < self.default_range[0]:
+            label_arr = None
+            # label_arr = self.arr[(i+1):(i + self.k_days + 2)][::self.sampling_days, self.label_columns_idx]
+        else:
+            label_arr = self.arr[(i+1):(i + self.k_days + 2)][::self.sampling_days, self.label_columns_idx]
+
         out = {'features_prev': self.arr[max(0, i - self.window - self.sampling_days):(i + 1 - self.sampling_days)][self.adj::self.sampling_days],
-               'features':  self.arr[max(0, i - self.window):(i + 1)][self.adj::self.sampling_days],
-               'labels':  self.arr[(i+1):(i + self.k_days + 2)][::self.sampling_days, self.label_columns_idx],
+               'features': self.arr[max(0, i - self.window):(i + 1)][self.adj::self.sampling_days],
+               'labels': label_arr,
                }
 
         return out
