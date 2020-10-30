@@ -216,6 +216,9 @@ class Trainer:
 
         return adaptive_flag
 
+    def load_model(self, path):
+        ep = load_model(path, self.model, self.optimizer)
+
     def run(self, t, use_plot=True):
         c = self.c
         outpath_t = self.make_dir(t)
@@ -235,6 +238,7 @@ class Trainer:
                 if early_stopped and not adaptive_flag:
                     self.model.load_from_optim()
                     self.loss_logger.info('early stopped')
+                    save_model(outpath_t, ep, self.model, self.optimizer)
                     break
                 elif early_stopped and adaptive_flag:
                     # if adaptive_flag, reset to False and corresponding parameters
@@ -641,7 +645,7 @@ def main(testmode=False):
     # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
     #     for key in ['m']:
             # configs & variables
-            name = 'attn_0914_02_{}'.format(key)
+            name = 'attn_0914_03_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
             c.base_weight = base_weight[key]

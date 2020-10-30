@@ -377,7 +377,7 @@ class MyModel(Module):
         dist = torch.distributions.Normal(loc=wgt_mu, scale=wgt_sigma)
         if is_train:
             # wgt_ = dist.rsample()
-            wgt_ = wgt_mu + torch.randn_like(wgt_sigma) * wgt_sigma # reparameterization trick
+            wgt_ = wgt_mu + torch.randn_like(wgt_sigma) * wgt_sigma  # reparameterization trick
         else:
             wgt_ = wgt_mu
 

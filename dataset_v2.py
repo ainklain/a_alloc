@@ -7,6 +7,42 @@ import transforms_v2
 
 # Data Description
 
+
+class AplusDataWithoutTransform(DataFromFiles):
+    def __init__(self, file_nm='app_data_20201020.txt'):
+        super().__init__(file_nm)
+
+
+class MacroDataWithoutTransform(DataFromFiles):
+    def __init__(self, file_nm='macro_data_20201020.txt'):
+        super().__init__(file_nm)
+
+
+class AplusLogyData(DataFromFiles):
+    def __init__(self, file_nm='app_data_20201020.txt'):
+        super().__init__(file_nm)
+
+    def _transform(self):
+        transforms_apply = transforms_v2.Transforms([
+            (transforms_v2.RollingLogReturn(1), 'logy'),
+        ])
+
+        self.df = transforms_apply.sequential(self.df)
+
+
+class MacroLogyData(DataFromFiles):
+    def __init__(self, file_nm='macro_data_20201020.txt'):
+        super().__init__(file_nm)
+
+    def _transform(self):
+        transforms_apply = transforms_v2.Transforms([
+            (transforms_v2.RollingLogReturn(1), 'logy'),
+        ])
+
+        self.df = transforms_apply.sequential(self.df)
+
+
+
 class AplusData(DataFromFiles):
     def __init__(self, file_nm='app_data_20200831.txt'):
         super().__init__(file_nm)
