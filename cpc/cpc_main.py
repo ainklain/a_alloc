@@ -174,10 +174,8 @@ class Decoder(nn.Module):
         return x_pred       # x_pred: [batch_size, 3, 20] :  2 positional encoding + 1 value
 
 
-
 class Critic(nn.Module):
     def __init__(self, dim_hidden=64):
-
         kernel_size = [5, 3]   # 5d, 20d, 60d, 240d
         self.encoder = nn.Sequential(
             nn.Conv1d(3, dim_hidden, kernel_size[0], bias=False),
@@ -204,19 +202,17 @@ class Critic(nn.Module):
         return out
 
 
-
 class MyModel(nn.Module):
-    def __init__(self):
-        self.cpc_encoder = cpc_encoder
-        self.decoder = decoder
-        self.critic = critic
-
+    def __init__(self, n_timesteps_to_predict_z=400, dim_hidden=64, dim_latent=32):
+        self.cpc_encoder = CPCEncoder(n_timesteps_to_predict_z, dim_hidden, dim_latent)
+        self.decoder = Decoder(dim_hidden, dim_latent)
+        self.critic = Critic(dim_hidden, dim_latent)
 
     def forward(self):
         pass
 
 
-class MyModel(nn.Module):
+class MyModel_cpc(nn.Module):
     def __init__(self, timestep, seq_len, dim_hidden=64):
         super(MyModel, self).__init__()
         # self.batch_size = batch_size
