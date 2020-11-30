@@ -234,6 +234,7 @@ def main():
 
     # train_loader = toy_example()
 
+
     model = MyModel()
     model.to('cuda:0')
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
