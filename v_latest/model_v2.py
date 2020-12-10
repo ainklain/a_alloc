@@ -263,8 +263,11 @@ class StrategiesAllocator(Module):
 
         x = self.out_layer(x)
         wgt_mu, wgt_logsigma = torch.chunk(x, 2, dim=-1)
-        wgt_mu = 0.99 * torch.tanh(wgt_mu) + 1e-6
-        wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
+        # wgt_mu = 0.99 * torch.tanh(wgt_mu) + 1e-6
+        # wgt_sigma = 0.2 * F.softplus(wgt_logsigma) + 1e-6
+
+        # wgt_mu = 2. * torch.tanh(wgt_mu) + 1e-6
+        wgt_sigma = 1. * F.softplus(wgt_logsigma) + 1e-6
 
         return wgt_mu, wgt_sigma
 
@@ -336,7 +339,7 @@ class MyModel(Module):
         # expected return estimation
         # _, pred_mu, pred_sigma = self.expected_return_estimator.run(x[:, -1, :], mc_samples=mc_samples)
         _, pred_mu, pred_sigma = self.expected_return_estimator.run(x_emb[:, -1, :], mc_samples=mc_samples)
-
+        # print(pred_mu.exp().mean(dim=0), pred_sigma.mean(dim=0))
         # allocation
         x = torch.cat([pred_mu, pred_sigma, wgt, x_emb[:, -1, :], x_attn], dim=-1)
         wgt_mu, wgt_sigma = self.strategies_allocator(x)
@@ -347,12 +350,31 @@ class MyModel(Module):
         c = self.c
         noncash_idx = np.delete(np.arange(wgt_guide.shape[1]), c.cash_idx)
 
-        wgt_ = wgt_.clamp(-0.99, 0.99)
-        wgt_ = (1. + wgt_) * wgt_guide[:, noncash_idx]
+        wgt_max_noncash = torch.tensor(c.wgt_range_max).to(wgt_)[noncash_idx]
+        wgt_min_noncash = torch.tensor(c.wgt_range_min).to(wgt_)[noncash_idx]
+
+        wgt_min_cash = torch.tensor(c.wgt_range_min).to(wgt_)[c.cash_idx]
+
+        # 모델 산출 값만큼 반영하고,
+        # wgt_ = torch.tanh(wgt_)
+        # wgt_ = (1. + wgt_) * wgt_guide[:, noncash_idx]
+        wgt_ = (1. + torch.tanh(wgt_)) * wgt_guide[:, noncash_idx]
+        # wgt_ = torch.softmax(wgt_, dim=-1)
+
+        # 자산별 min/max 맞춘 후
+        # wgt_ = wgt_min_noncash + wgt_ * (wgt_max_noncash - wgt_min_noncash)
+        wgt_ = torch.min(torch.max(wgt_, wgt_min_noncash), wgt_max_noncash)
+
+        # 최소 cash 비율 맞추고
+        # wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True), wgt_min_cash)
+        # wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6) * (1 - wgt_rf)
         wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True),
                            torch.zeros(wgt_.shape[0], 1, device=wgt_.device))
 
+        # 이어붙인다
         wgt_ = torch.cat([wgt_[:, :c.cash_idx], wgt_rf, wgt_[:, c.cash_idx:]], dim=-1) + 1e-3
+
+        # 이미 합은 1이어야 하지만 혹시 몰라 조정
         wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
         return wgt_
 
@@ -441,7 +463,7 @@ class MyModel(Module):
                 if key == 'y_pf':
                     losses_dict[key] = -((x - guide_wgt) * next_y).sum()
                 elif key == 'mdd_pf':
-                    losses_dict[key] = 10 * F.elu(-(x * next_y).sum(dim=1) - 0.05, 1e-6).sum()
+                    losses_dict[key] = 10 * F.elu(-(x * next_y).sum(dim=1) - c.mdd_cp, 1e-6).sum()
                 elif key == 'logy':
                     losses_dict[key] = nn.MSELoss(reduction='sum')(pred_mu, labels['logy'])
                 elif key == 'wgt_guide':

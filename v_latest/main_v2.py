@@ -1,4 +1,5 @@
 from copy import deepcopy
+import argparse
 import random
 import re
 import os
@@ -10,11 +11,12 @@ from matplotlib import pyplot as plt, cm
 import GPUtil
 
 from ray import tune
+from ray.tune.schedulers import ASHAScheduler
 
-from logger_v2 import Logger
-from model_v2 import MyModel, load_model, save_model
-from dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData
-from optimizer_v2 import RAdam
+from v_latest.logger_v2 import Logger
+from v_latest.model_v2 import MyModel, load_model, save_model
+from v_latest.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData
+from v_latest.optimizer_v2 import RAdam
 import torch_utils as tu
 
 
@@ -29,6 +31,13 @@ except AttributeError:
 # # #### profiler end ####
 
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--prefix', default='test', type=str)
+
+args = parser.parse_args()
+
+
 class Configs:
     def __init__(self, name):
         self.comment = """
@@ -37,9 +46,9 @@ class Configs:
 
         self.seed = 1000
         self.name = name
-        self.pre_lr = 1e-2
-        self.lr = 1e-1
-        self.batch_size = 256
+        self.pre_lr = 5e-3
+        self.lr = 5e-2
+        self.batch_size = 512
         self.num_epochs = 1000
         self.base_i0 = 2000
         self.mc_samples = 1000
@@ -52,10 +61,10 @@ class Configs:
         self.adaptive_flag = True
         self.adaptive_count = 10
         self.adaptive_lrx = 5  # learning rate * 배수
-        self.es_max_count = 20
+        self.es_max_count = 200
 
         self.retrain_days = 240
-        self.test_days = 2000  # test days
+        self.test_days = 5000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
         self.normalizing_window = 500  # norm windows for macro data
@@ -70,7 +79,7 @@ class Configs:
         # self.datatype = 'inv'
 
         self.cost_rate = 0.003
-        self.plot_freq = 50
+        self.plot_freq = 10
         self.eval_freq = 1  # 20
         self.save_freq = 20
         self.model_init_everytime = False
@@ -101,8 +110,8 @@ class Configs:
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 1., 'wgt_guide': 0.1, 'cost': 10., 'entropy': 0.0}
-        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 0.5, 'cost': 10., 'entropy': 0.0}
+        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.001, 'cost': 0.1, 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -150,8 +159,9 @@ def calc_y(wgt0, y1, cost_r=0.):
 
 
 class Trainer:
-    def __init__(self, c, dataset_manager):
+    def __init__(self, c, dataset_manager, tune_c=None):
         self.c = c
+        self.tune_c = tune_c
         self.dataset_manager = dataset_manager
         self.loss_logger = Logger(self.__class__.__name__)
 
@@ -160,11 +170,18 @@ class Trainer:
 
     def reset_model(self):
         c = self.c
+        if self.tune_c is not None:
+            pre_lr = self.tunc_c['pre_lr']
+            lr = self.tunc_c['lr']
+        else:
+            pre_lr = c.pre_lr
+            lr = c.lr
+
         dm = self.dataset_manager
         self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
         # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
-        self.pre_optimizer = RAdam(self.model.parameters(), lr=c.pre_lr, weight_decay=0.01)
-        self.post_optimizer = RAdam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
+        self.pre_optimizer = RAdam(self.model.parameters(), lr=pre_lr, weight_decay=0.01)
+        self.post_optimizer = RAdam(self.model.parameters(), lr=lr, weight_decay=0.01)
         self.optimizer = None
         self.model.to(tu.device)
 
@@ -230,10 +247,16 @@ class Trainer:
         outpath_t = self.make_dir(t)
 
         losses_train = losses_eval = losses_test = float('inf')
-        losses_dict = {'train': np.zeros([c.num_epochs]), 'eval': np.zeros([c.num_epochs]), 'test': np.zeros([c.num_epochs])}
+        losses_dict = {'train': np.zeros([c.num_epochs]),
+                       'eval': np.zeros([c.num_epochs]),
+                       'test': np.zeros([c.num_epochs])}
 
         adaptive_flag = self.set_adaptive_configs(c.adaptive_flag)
         for ep in range(c.num_epochs):
+            if ep == c.num_epochs:
+                self.model.load_from_optim()
+                save_model(outpath_t, ep, self.model, self.optimizer)
+
             if ep % c.eval_freq == 0:
                 losses_eval, early_stopped = self.eval(t, ep)
                 # evaluate
@@ -249,7 +272,7 @@ class Trainer:
                 elif early_stopped and adaptive_flag:
                     # if adaptive_flag, reset to False and corresponding parameters
                     adaptive_flag = self.set_adaptive_configs(False)
-                    c.plot_freq = 1
+                    # c.plot_freq = 1
                 else:
                     assert not early_stopped
 
@@ -648,15 +671,19 @@ def income():
             trainer.run_all()
 
 
+
 testmode = False
 @profile
 def main(testmode=False):
-
-            # 실제
             base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-                               m=[0.45, 0.15, 0.075, 0.325],
-                               l=[0.30, 0.1, 0.05, 0.55],
+                               m=[0.4, 0.1, 0.075, 0.425],
+                               l=[0.25, 0.05, 0.05, 0.65],
                                eq=[0.25, 0.25, 0.25, 0.25])
+            # # 실제
+            # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
+            #                    m=[0.45, 0.15, 0.075, 0.325],
+            #                    l=[0.30, 0.1, 0.05, 0.55],
+            #                    eq=[0.25, 0.25, 0.25, 0.25])
 
             # 검증
             # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
@@ -665,17 +692,48 @@ def main(testmode=False):
             #                    eq=[0.25, 0.25, 0.25, 0.25])
 
             for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-                for key in ['l','m','h','eq',]:
+            # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
+                for key in ['h','m','l','eq',]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
             # for seed, suffix in zip([100], ["_0"]):
             #     for key in ['eq']:
                     # configs & variables
-                    name = 'attn_app_1204_01_{}'.format(key)
+                    name = '{}_{}'.format(args.prefix, key)
                     # name = 'app_adv_1'
                     c = Configs(name)
                     c.base_weight = base_weight[key]
                     c.seed = seed
-                    c.cash_idx = 2
+                    c.cash_idx = 3
+
+                    if key == 'h':
+                        # c.loss_wgt['wgt_guide'] = 0.0
+                        # c.wgt_range = 0.11 * 2
+                        c.wgt_range_min = [0.5, 0.1, 0., 0.01]
+                        c.wgt_range_max = [1., 1., 0.3, 0.3]
+
+                        c.mdd_cp = 0.2
+
+                    elif key == 'm':
+                        # c.loss_wgt['wgt_guide'] = 0.0
+                        # c.wgt_range = 0.08 * 2
+                        c.wgt_range_min = [0.2, 0.05, 0.01, 0.2]
+                        c.wgt_range_max = [0.8, 0.8, 0.15, 1.]
+
+                        c.mdd_cp = 0.05
+                    elif key == 'l':
+                        # c.loss_wgt['wgt_guide'] = 0.0
+                        # c.wgt_range = 0.24 * 2
+                        c.wgt_range_min = [0.1, 0.02, 0., 0.4]
+                        c.wgt_range_max = [0.5, 0.5, 0.1, 1.]
+                        c.mdd_cp = 0.03
+                    else:
+                        # c.loss_wgt['wgt_guide'] = 0.0
+                        # c.wgt_range = 0.99
+                        c.wgt_range_min = [0., 0., 0., 0.]
+                        c.wgt_range_max = [1., 1., 1., 1.]
+                        c.mdd_cp = 0.05
+
+
                     # seed
                     random.seed(c.seed)
                     np.random.seed(c.seed)
@@ -688,9 +746,13 @@ def main(testmode=False):
                         f.write(str_)
 
                     # data processing
+                    if c.cash_idx == 2:
+                        data_list = [AssetData(), MacroData()]
+                    elif c.cash_idx == 3:
+                        data_list = [AplusData('app_data_20201103.txt'), MacroData('macro_data_20201030.txt')]
+                    else:
+                        raise NotImplementedError
 
-                    data_list = [AplusData(), MacroData()]
-                    # data_list = [AssetData(), MacroData()]
                     # data_list = [Index(), MacroData()]
                     dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
@@ -701,6 +763,7 @@ def main(testmode=False):
                     # train(c, model, optimizer, sampler, t=1700)
 
                     # backtest(c, sampler, suffix)
+
 
 
 if __name__ == '__main__':

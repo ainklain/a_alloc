@@ -82,10 +82,14 @@ class MyDataset(Dataset):
 
 def get_rawdata():
     logy_data = [AplusLogyData(), MacroLogyData()]
+    logy_data = [AplusLogyData()]
     for data_type in logy_data:
         data_type.transform()
 
-    df = pd.merge(*[x.df for x in logy_data], left_index=True, right_index=True, how='inner')
+    if len(logy_data) == 1:
+        df = logy_data[0].df
+    else:
+        df = pd.merge(*[x.df for x in logy_data], left_index=True, right_index=True, how='inner')
 
     df = df[~df.isna().any(axis=1)]
     return df

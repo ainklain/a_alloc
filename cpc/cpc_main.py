@@ -11,6 +11,10 @@ from torch.utils.data import Dataset, DataLoader
 from dataset_v2 import AplusLogyData, MacroLogyData
 
 
+def np_ify(x):
+    return x.detach().cpu().numpy()
+
+
 class SampleDataset(Dataset):
     def __init__(self, df_raw):
         super().__init__()
@@ -36,12 +40,11 @@ class SampleDataset_new(Dataset):
         self.num_timesteps_data = 1000
         self.num_timesteps_label = 400
         self.asset_name = list(df_raw.columns)
-        arr = df_raw.to_numpy(dtype=np.float32).transpose()[:, np.newaxis, :]
-        arr_p = np.cumprod((1+arr), axis=-1)
-        arr_p = np.concatenate([arr_p[:, :, 20:] / arr_p[:, :, :-20], arr_p[:, :, -1:] / arr_p[:, :, -20:]], axis=-1)
+        self.arr = df_raw.to_numpy(dtype=np.float32).transpose()[:, np.newaxis, :]
+        # arr_p = np.cumprod((1+arr), axis=-1)
+        # arr_p = np.concatenate([arr_p[:, :, 20:] / arr_p[:, :, :-20], arr_p[:, :, -1:] / arr_p[:, :, -20:]], axis=-1)
         if type_ == 'train':
             self.idx_list = np.arange(self.num_timesteps_data, int(len(df_raw) * 0.6))
-
         elif type_ == 'eval':
             self.idx_list = np.arange(int(len(df_raw) * 0.6), int(len(df_raw * 0.8) - self.num_timesteps_label))
         elif type_ == 'test':
@@ -64,16 +67,20 @@ class SampleDataset_new(Dataset):
         return x
 
 
-def get_loader(dataset, batch_size):
-    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+def get_loader(dataset, batch_size, shuffle=True):
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
 def get_rawdata():
-    logy_data = [AplusLogyData(), MacroLogyData()]
+    # logy_data = [AplusLogyData(), MacroLogyData()]
+    logy_data = [AplusLogyData()]
     for data_type in logy_data:
         data_type.transform()
 
-    df = pd.merge(*[x.df for x in logy_data], left_index=True, right_index=True, how='inner')
+    if len(logy_data) == 1:
+        df = logy_data[0].df
+    else:
+        df = pd.merge(*[x.df for x in logy_data], left_index=True, right_index=True, how='inner')
 
     df = df[~df.isna().any(axis=1)]
     return df
@@ -179,7 +186,7 @@ class CPCEncoder(nn.Module):
         z = z.transpose(1, 2)   # z: [n_batch, n_timesteps_z, dim_hidden]
         z, hidden = self.ar_model(z, hidden)    # z: [n_batch, n_timesteps_z, dim_latent]
 
-        return z, hidden
+        return z[:, -1, :], hidden
 
 
 class Decoder(nn.Module):
@@ -262,8 +269,8 @@ class MyModel_simple(nn.Module):
         return self.cpc_encoder.init_hidden(*args, **kwargs)
 
     def forward(self, x, hidden):
-        context, accuracy, nce, hidden = self.cpc_encoder(x, hidden)
-        y = self.out_layer(context)
+        context, hidden = self.cpc_encoder.predict(x, hidden)
+        y = torch.sigmoid(self.out_layer(context)).squeeze()
 
         return context, y
 
@@ -379,9 +386,9 @@ class MyModel_cpc(nn.Module):
 
     def init_hidden(self, batch_size, use_gpu=True):
         if use_gpu:
-            return torch.zeros(1, batch_size, self.dim_hidden//2).cuda()
+            return torch.zeros(1, batch_size, self.dim_hidden//2, requires_grad=True).cuda()
         else:
-            return torch.zeros(1, batch_size, self.dim_hidden//2)
+            return torch.zeros(1, batch_size, self.dim_hidden//2, requires_grad=True)
 
     def forward(self, x, hidden):
         """
@@ -559,7 +566,7 @@ def main_simple():
 
     train_loader = get_loader(SampleDataset_new(df_raw, 'train'), batch_size=1)
     eval_loader = get_loader(SampleDataset_new(df_raw, 'eval'), batch_size=1)
-    test_loader = get_loader(SampleDataset_new(df_raw, 'test'), batch_size=1)
+    test_loader = get_loader(SampleDataset_new(df_raw, 'test'), batch_size=1, shuffle=False)
 
     # x_raw = next(iter(train_loader)).float()
     # batch_size, _, seq_len = x.shape
@@ -575,7 +582,7 @@ def main_simple():
     best_epoch = -1
 
     # training
-    for epoch in range(1, 31):
+    for epoch in range(1, 3):
         train_acc, train_loss = train_simple(epoch, model, optimizer, train_loader, use_gpu, is_train=True)
         eval_acc, eval_loss = train_simple(epoch, model, optimizer, eval_loader, use_gpu, is_train=False)
         losses['t'].append(train_loss)
@@ -616,6 +623,35 @@ def main_simple():
 
         print("ep : {}   acc: {:.3f} / {:.3f}  loss: {:.3f} / {:.3f}".format(
             epoch, ft_train_acc, ft_eval_acc, ft_train_loss, ft_eval_loss))
+
+
+    results = []
+    labels = []
+    model.eval()
+    with torch.set_grad_enabled(False):
+        for x_data in train_loader:
+            # x_data = next(iter(test_loader))
+            x_data = x_data[0].to(device)
+            data, label = x_data[:, :, :1000], (1+x_data[:, :, 1001:1021]).log().sum(dim=-1).exp()
+
+            hidden = model.init_hidden(len(data))
+            _, pred = model(data, hidden)
+
+            label = np_ify(label).reshape([-1, 1])
+            pred = np_ify(pred).reshape([-1, 1])
+            labels.append(label)
+            results.append((label * (pred >= 0.5)))
+
+    labels_arr = np.concatenate(labels, axis=1)
+    results_arr = np.concatenate(results, axis=1)
+
+    import matplotlib.pyplot as plt
+    labels_cum = labels_arr[:, ::20].cumprod(axis=-1)
+    results_cum = results_arr[:, ::20].cumprod(axis=-1)
+    i = 0
+    plt.plot(labels_cum[i])
+    plt.plot(results_cum[i])
+
 
 
 

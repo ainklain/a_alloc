@@ -1,8 +1,8 @@
 
 import numpy as np
 from collections import OrderedDict
-from dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
-import transforms_v2
+from v_latest.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
+from v_latest import transforms_v2
 
 
 # Data Description
