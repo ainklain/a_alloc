@@ -14,10 +14,10 @@ import GPUtil
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 
-from v_latest.logger_v2 import Logger
-from v_latest.model_v2 import MyModel, load_model, save_model
-from v_latest.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData
-from v_latest.optimizer_v2 import RAdam
+from v20201222.logger_v2 import Logger
+from v20201222.model_v2 import MyModel, load_model, save_model
+from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
+from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
 
 
@@ -696,7 +696,7 @@ def main(testmode=False):
 
             for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
             # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
-            #     for key in ['l','m','h','eq',]:
+            #     for key in ['m','l','h','eq',]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
             # for seed, suffix in zip([100], ["_0"]):
                 for key in ['eq']:
@@ -706,7 +706,6 @@ def main(testmode=False):
                     c = Configs(name)
                     c.base_weight = base_weight[key]
                     c.seed = seed
-                    c.cash_idx = 7
 
                     if key == 'h':
                         c.loss_wgt['wgt_guide'] = 0.02
@@ -749,13 +748,17 @@ def main(testmode=False):
                     torch.backends.cudnn.benchmark = False
 
 
+                    c.cash_idx = 2
                     # data processing
                     if c.cash_idx == 2:
-                        data_list = [AssetData(), MacroData()]
-                        ii = 5000
+                        # data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
+                        data_list = [DummyMacroData(), AssetData('asset_data_us_20201222.txt')]
+                        c.loss_wgt['mdd_pf'] = 0.1
+
+                        ii = 3500
                     elif c.cash_idx == 3:
-                        data_list = [AplusData('app_data_20201103.txt'), MacroData('macro_data_20201030.txt')]
-                        ii = 3900
+                        data_list = [AplusData('app_data_20201222.txt'), MacroData('macro_data_20201222.txt')]
+                        ii = 3500
                     elif c.cash_idx == 7:
                         data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
                         ii = 3500

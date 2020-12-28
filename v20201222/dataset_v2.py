@@ -1,25 +1,37 @@
 
 import numpy as np
 from collections import OrderedDict
-from v_latest.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
-from v_latest import transforms_v2
+from v20201222.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
+from v20201222 import transforms_v2
 
 
 # Data Description
 
 
+class DummyMacroData(DataFromFiles):
+    def __init__(self, file_nm='macro_data_20201222.txt'):
+        super().__init__(file_nm)
+
+    def _transform(self):
+        transforms_apply = transforms_v2.Transforms([
+            (transforms_v2.RandomLike(), 'logy'),
+        ])
+
+        self.df = transforms_apply.sequential(self.df)
+
+
 class AplusDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201020.txt'):
+    def __init__(self, file_nm='app_data_20201222.txt'):
         super().__init__(file_nm)
 
 
 class MacroDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201020.txt'):
+    def __init__(self, file_nm='macro_data_20201222.txt'):
         super().__init__(file_nm)
 
 
 class AplusLogyData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201020.txt'):
+    def __init__(self, file_nm='app_data_20201222.txt'):
         super().__init__(file_nm)
 
     def _transform(self):
@@ -32,7 +44,7 @@ class AplusLogyData(DataFromFiles):
 
 
 class MacroLogyData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201020.txt'):
+    def __init__(self, file_nm='macro_data_20201222.txt'):
         super().__init__(file_nm)
 
     def _transform(self):
@@ -44,7 +56,7 @@ class MacroLogyData(DataFromFiles):
 
 
 class AplusData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20200831.txt'):
+    def __init__(self, file_nm='app_data_20201222.txt'):
         super().__init__(file_nm)
         self.label_columns_dict = OrderedDict()
         for feature in ['logy', 'mu', 'sigma']:
@@ -79,7 +91,7 @@ class IncomeData(AplusData):
 
 
 class MacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20200914.txt'):
+    def __init__(self, file_nm='macro_data_20201222.txt'):
         super().__init__(file_nm)
         self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
         self.df['spx_dj'] = self.df['spx index'] / self.df['indu index']
