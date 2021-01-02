@@ -11,8 +11,8 @@ import pandas as pd
 from matplotlib import pyplot as plt, cm
 import GPUtil
 
-from ray import tune
-from ray.tune.schedulers import ASHAScheduler
+# from ray import tune
+# from ray.tune.schedulers import ASHAScheduler
 
 from v20201222.logger_v2 import Logger
 from v20201222.model_v2 import MyModel, load_model, save_model
@@ -629,6 +629,16 @@ class Trainer:
         fig.savefig(os.path.join(outpath, 'learning_curve.png'))
         plt.close(fig)
 
+    def plot_macro(self, outpath):
+        _, m_data = self.dataset_manager._original_recent_250d
+        for c in m_data.columns:
+            fig = plt.figure()
+            plt.plot(m_data[c])
+            plt.xticks(np.arange(0, len(m_data), 50), m_data.index[::50])
+            plt.title(c)
+            fig.savefig(os.path.join(outpath, '{}.png'.format(c)))
+            plt.close(fig)
+
     def run_all(self):
         c = self.c
         iter_ = range(c.base_i0, self.dataset_manager.max_len, c.retrain_days)
@@ -694,14 +704,31 @@ def main(testmode=False):
             #                    l=[0.25, 0.1, 0.05, 0.6],
             #                    eq=[0.25, 0.25, 0.25, 0.25])
 
-            for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
+            # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
             # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
             #     for key in ['m','l','h','eq',]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
-            # for seed, suffix in zip([100], ["_0"]):
-                for key in ['eq']:
+            for seed, suffix in zip([123], ["_0"]):
+                for aa in [# ['spx500','bbusagtr'],
+                            ['gscigold','bbusagtr'],
+                           # ['spx500', 'gscigold', 'bbusagtr'],
+                           # ['spx500', 'russell2000', 'gscigold', 'bbusagtr'],
+                           # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
+                           # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
+                           # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
+                           ]:
+                # for key in ['eq']:
+                # m_data_raw = MacroData('macro_data_20201222.txt')
+                # for m in m_data_raw.columns:
+                #     m_data = MacroData('macro_data_20201222.txt')
+                    # m = ['usyc3m2y index','gdp cury index','cl1 comdty','indu index']
+                    # m_data.df = m_data.df.loc[:, m]
+                    # m_data.columns = m
+                    aa_str = '-'.join(aa)
+                    key = 'eq'
+                    lr = 0.1
                     # configs & variables
-                    name = '{}_{}'.format(args.prefix, key)
+                    name = '{}_{}'.format(args.prefix, key+str(lr)+aa_str)
                     # name = 'app_adv_1'
                     c = Configs(name)
                     c.base_weight = base_weight[key]
@@ -748,27 +775,52 @@ def main(testmode=False):
                     torch.backends.cudnn.benchmark = False
 
 
-                    c.cash_idx = 2
-                    # data processing
-                    if c.cash_idx == 2:
-                        # data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
-                        data_list = [DummyMacroData(), AssetData('asset_data_us_20201222.txt')]
+                    select = True
+                    if select is True:
                         c.loss_wgt['mdd_pf'] = 0.1
+                        c.lr = lr
 
-                        ii = 3500
-                    elif c.cash_idx == 3:
-                        data_list = [AplusData('app_data_20201222.txt'), MacroData('macro_data_20201222.txt')]
-                        ii = 3500
-                    elif c.cash_idx == 7:
-                        data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
-                        ii = 3500
-                        c.base_weight = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
-                        c.wgt_range_min = [0., 0., 0., 0., 0., 0., 0., 0.]
-                        c.wgt_range_max = [1., 1., 1., 1., 1., 1., 1., 1.]
-                        c.loss_wgt['logy'] = 0.1
+                        a_data = AssetData('asset_data_us_ext_20201222.txt')
+                        from collections import OrderedDict
 
+                        label_columns_dict = OrderedDict()
+                        for feature in ['logy', 'mu', 'sigma']:
+                            label_columns_dict[feature] = ['{}_{}'.format(col, feature) for col in aa]
+
+                        a_data.df = a_data.df.loc[:, aa]
+                        a_data.columns = aa
+                        a_data.label_columns_dict = label_columns_dict
+
+                        data_list = [MacroData('macro_data_20201222.txt'), a_data]
+                        c.cash_idx = len(aa) - 1
+                        c.base_weight = [1. / len(aa)] * len(aa)
+                        c.wgt_range_min = [0.] * len(aa)
+                        c.wgt_range_max = [1.] * len(aa)
+                        ii = 3500
                     else:
-                        raise NotImplementedError
+                        c.cash_idx = 2
+                        # data processing
+                        if c.cash_idx == 2:
+                            # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
+                            data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
+                            # data_list = [MacroData('dummy_macro_data_20201222.txt'), AssetData('asset_data_us_20201222.txt')]
+                            c.loss_wgt['mdd_pf'] = 0.1
+                            c.lr = lr
+
+                            ii = 3500
+                        elif c.cash_idx == 3:
+                            data_list = [AplusData('app_data_20201222.txt'), MacroData('macro_data_20201222.txt')]
+                            ii = 3500
+                        elif c.cash_idx == 7:
+                            data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
+                            ii = 3500
+                            c.base_weight = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
+                            c.wgt_range_min = [0., 0., 0., 0., 0., 0., 0., 0.]
+                            c.wgt_range_max = [1., 1., 1., 1., 1., 1., 1., 1.]
+                            c.loss_wgt['logy'] = 0.1
+
+                        else:
+                            raise NotImplementedError
 
                     str_ = c.export()
                     with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
@@ -779,8 +831,8 @@ def main(testmode=False):
                     dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
                     trainer = Trainer(c, dm)
-                    # trainer.run_all()
-                    trainer.run(ii)
+                    trainer.run_all()
+                    # trainer.run(ii)
                     # train(c, model, optimizer, dm, 3489)
                     # train(c, model, optimizer, sampler, t=1700)
 

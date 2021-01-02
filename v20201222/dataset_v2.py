@@ -93,9 +93,14 @@ class IncomeData(AplusData):
 class MacroData(DataFromFiles):
     def __init__(self, file_nm='macro_data_20201222.txt'):
         super().__init__(file_nm)
-        self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
-        self.df['spx_dj'] = self.df['spx index'] / self.df['indu index']
-        self.df['spx_rs'] = self.df['spx index'] / self.df['rty index']
+        if 'hg1 comdty' in self.df.columns and 'gc1 comdty' in self.df.columns:
+            self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
+        if 'spx index' in self.df.columns:
+            if 'indu index' in self.df.columns:
+                self.df['spx_dj'] = self.df['spx index'] / self.df['indu index']
+            if 'rty index' in self.df.columns:
+                self.df['spx_rs'] = self.df['spx index'] / self.df['rty index']
+
         self.columns = self.df.columns
 
     def _transform(self):
