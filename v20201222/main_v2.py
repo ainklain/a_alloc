@@ -15,7 +15,7 @@ import GPUtil
 # from ray.tune.schedulers import ASHAScheduler
 
 from v20201222.logger_v2 import Logger
-from v20201222.model_v2 import MyModel, load_model, save_model
+from v20201222.model_v2_bond import MyModel, load_model, save_model
 from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
 from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
@@ -30,13 +30,6 @@ except AttributeError:
     def profile(func): return func
     builtins.profile = profile
 # # #### profiler end ####
-
-
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--prefix', default='test', type=str)
-
-args = parser.parse_args()
 
 
 class Configs:
@@ -146,6 +139,37 @@ class Configs:
             return_str += "{}: {}\n".format(key, self.__dict__[key])
 
         return return_str
+
+    def load(self, model_path):
+        from ast import literal_eval
+        # load and parse 'c.txt'
+        p = re.compile('[a-zA-Z0-9_]+[:]')
+        with open(os.path.join(model_path, 'c.txt'), 'r') as f:
+            print('{} loaded'.format(os.path.join(model_path, 'c.txt')))
+            texts = ''.join(f.readlines())
+
+        tags = p.findall(texts)
+
+        for tag in tags[::-1]:
+            *texts, val = texts.split(tag)
+            texts = tag.join(texts)
+
+            a = tag.split(':')[0]
+            if a in ['outpath', 'name']:
+                continue
+
+            val = val.strip()
+            if val in ['True', 'False']:
+                self.__setattr__(a, bool(val))
+            elif re.match("\[.+\]", val) is not None or re.match("\{.+\}", val) is not None:
+                self.__setattr__(a, literal_eval(val))
+            elif re.fullmatch("[0-9.]+", val):
+                if "." in val:
+                    self.__setattr__(a, float(val))
+                else:
+                    self.__setattr__(a, int(val))
+            else:
+                self.__setattr__(a, val)
 
 
 def calc_y(wgt0, y1, cost_r=0.):
@@ -687,7 +711,7 @@ def income():
 
 testmode = False
 @profile
-def main(testmode=False):
+def main(testmode=False, args=None):
             base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
                                m=[0.4, 0.1, 0.075, 0.425],
                                l=[0.25, 0.05, 0.05, 0.65],
@@ -709,26 +733,30 @@ def main(testmode=False):
             #     for key in ['m','l','h','eq',]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
             for seed, suffix in zip([123], ["_0"]):
-                for aa in [# ['spx500','bbusagtr'],
-                            ['gscigold','bbusagtr'],
+                # for aa in [# ['spx500','bbusagtr'],
+                #             ['gscigold','bbusagtr'],
                            # ['spx500', 'gscigold', 'bbusagtr'],
                            # ['spx500', 'russell2000', 'gscigold', 'bbusagtr'],
                            # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
                            # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
-                           # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
-                           ]:
-                # for key in ['eq']:
+                           # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],]:
+                for key in ['l', 'm','h', 'eq']:
                 # m_data_raw = MacroData('macro_data_20201222.txt')
                 # for m in m_data_raw.columns:
                 #     m_data = MacroData('macro_data_20201222.txt')
                     # m = ['usyc3m2y index','gdp cury index','cl1 comdty','indu index']
                     # m_data.df = m_data.df.loc[:, m]
                     # m_data.columns = m
+                    aa = ''
                     aa_str = '-'.join(aa)
-                    key = 'eq'
+                    # key = 'eq'
                     lr = 0.1
                     # configs & variables
-                    name = '{}_{}'.format(args.prefix, key+str(lr)+aa_str)
+                    if args is not None:
+                        name = '{}_{}'.format(args.prefix, key+str(lr)+aa_str)
+                    else:
+                        name = '{}'.format(key + str(lr) + aa_str)
+
                     # name = 'app_adv_1'
                     c = Configs(name)
                     c.base_weight = base_weight[key]
@@ -743,20 +771,27 @@ def main(testmode=False):
 
                         c.mdd_cp = 0.1
                         c.lr = 2e-2
+                        model_path = './out/test_20201222_01_h/3900_0'
 
+                        # l: ./out/test_20201222_01_l/3900_0
+                        # m: test_20201222_01_m
+                        # h: test_20201222_01_h
+                        # eq: test_20201222_01_eq
                     elif key == 'm':
                         c.loss_wgt['wgt_guide'] = 0.02
                         # c.wgt_range = 0.08 * 2
-                        c.wgt_range_min = [0.2, 0.05, 0.01, 0.2]
-                        c.wgt_range_max = [0.8, 0.8, 0.15, 1.]
+                        c.wgt_range_min = [0.2, 0.05, 0.01, 0.4]
+                        c.wgt_range_max = [0.65, 0.65, 0.15, 0.6]
 
                         c.mdd_cp = 0.05
+                        model_path = './out/test_20201222_01_m/3900_0'
                     elif key == 'l':
                         c.loss_wgt['wgt_guide'] = 0.02
                         # c.wgt_range = 0.24 * 2
-                        c.wgt_range_min = [0.1, 0.02, 0., 0.4]
-                        c.wgt_range_max = [0.5, 0.5, 0.1, 1.]
+                        c.wgt_range_min = [0.1, 0.02, 0., 0.6]
+                        c.wgt_range_max = [0.45, 0.45, 0.1, 0.8]
                         c.mdd_cp = 0.03
+                        model_path = './out/test_20201222_01_l/3900_0'
                     else:
                         # c.loss_wgt['wgt_guide'] = 0.0
                         # c.wgt_range = 0.99
@@ -764,6 +799,7 @@ def main(testmode=False):
                         c.wgt_range_min = [0., 0., 0., 0.]
                         c.wgt_range_max = [1., 1., 1., 1.]
                         c.mdd_cp = 0.05
+                        model_path = './out/test_20201222_01_eq/3900_0'
 
 
 
@@ -775,7 +811,7 @@ def main(testmode=False):
                     torch.backends.cudnn.benchmark = False
 
 
-                    select = True
+                    select = False
                     if select is True:
                         c.loss_wgt['mdd_pf'] = 0.1
                         c.lr = lr
@@ -798,7 +834,7 @@ def main(testmode=False):
                         c.wgt_range_max = [1.] * len(aa)
                         ii = 3500
                     else:
-                        c.cash_idx = 2
+                        c.cash_idx = 3
                         # data processing
                         if c.cash_idx == 2:
                             # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
@@ -809,8 +845,8 @@ def main(testmode=False):
 
                             ii = 3500
                         elif c.cash_idx == 3:
-                            data_list = [AplusData('app_data_20201222.txt'), MacroData('macro_data_20201222.txt')]
-                            ii = 3500
+                            data_list = [AplusData('app_data_20201230.txt'), MacroData('macro_data_20210104.txt')]
+                            ii = 3900
                         elif c.cash_idx == 7:
                             data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
                             ii = 3500
@@ -822,6 +858,8 @@ def main(testmode=False):
                         else:
                             raise NotImplementedError
 
+
+                    c.load(model_path)
                     str_ = c.export()
                     with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                         f.write(str_)
@@ -831,8 +869,8 @@ def main(testmode=False):
                     dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
                     trainer = Trainer(c, dm)
-                    trainer.run_all()
-                    # trainer.run(ii)
+                    # trainer.run_all()
+                    trainer.run(ii)
                     # train(c, model, optimizer, dm, 3489)
                     # train(c, model, optimizer, sampler, t=1700)
 
@@ -840,6 +878,83 @@ def main(testmode=False):
 
 
 
+def load_and_run(key, model_path):
+    from ast import literal_eval
+
+    base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
+                       m=[0.4, 0.1, 0.075, 0.425],
+                       l=[0.25, 0.05, 0.05, 0.65],
+                       eq=[0.25, 0.25, 0.25, 0.25])
+
+    # key = 'eq'
+    # model_path = './out/!test1_eq/3900_0'
+    # c_load = pd.read_csv(os.path.join(model_path, 'c.txt'))
+
+    # load and parse 'c.txt'
+    p = re.compile('[a-zA-Z0-9_]+[:]')
+    with open(os.path.join(model_path, 'c.txt'), 'r') as f:
+        texts = ''.join(f.readlines())
+
+    tags = p.findall(texts)
+    
+    c = Configs('')
+    for tag in tags[::-1]:
+        print(tag)
+        *texts, val = texts.split(tag)
+        texts = tag.join(texts)
+        print(val)
+
+        a = tag.split(':')[0]
+        val = val.strip()
+        if val in ['True', 'False']:
+            c.__setattr__(a, bool(val))
+        elif re.match("\[.+\]", val) is not None or re.match("\{.+\}", val) is not None:
+            c.__setattr__(a, literal_eval(val))
+        elif re.fullmatch("[0-9.]+", val):
+            if "." in val:
+                c.__setattr__(a, float(val))
+            else:
+                c.__setattr__(a, int(val))
+        else:
+            c.__setattr__(a, val)
+
+    # seed
+    tu.set_seed(c.seed)
+
+    data_list = [AplusData('app_data_20201230.txt'), MacroData('macro_data_20210104.txt')]
+    dm = DatasetManager(data_list, c.test_days, c.batch_size)
+    trainer = Trainer(c, dm)
+    trainer.load_model(model_path)
+
+    for is_insample in [True, False]:
+        t = 3900
+        # is_insample = True
+        mode = 'test_insample' if is_insample else 'test'
+        losses_test, data_for_plot = trainer.test(t, is_insample=is_insample)
+        date_dict = trainer.dataset_manager.get_begin_end_info(t, mode)
+        data_for_plot.update(date_dict)
+        trainer.plot(30000, data_for_plot, model_path, suffix=mode)
+        print(model_path)
+
+
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--prefix', default='test', type=str)
+    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--base_key', default='eq', type=str)
+    parser.add_argument('--model_path', default=None, type=str)
+
+    args = parser.parse_args()
+    if not args.test:
+        main(args=args)
+    else:
+        assert args.model_path is not None
+        load_and_run(args.base_key, args.model_path)
+
+
+        # l: ./out/test_20201222_01_l/3900_0
+        # m: test_20201222_01_m
+        # h: test_20201222_01_h
+        # eq: test_20201222_01_eq
     # income()
+

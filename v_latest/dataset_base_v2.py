@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, RandomSampler, SequentialSampler
 
-from v_latest import transforms_v2
+from v20201222 import transforms_v2
 
 
 class AbstractData(metaclass=ABCMeta):
@@ -184,6 +184,7 @@ class DatasetManagerBase(metaclass=ABCMeta):
         self.initialize(data_list, dataset_type, **kwargs)
 
     def initialize(self, data_list, dataset_type, **kwargs):
+        self._original_recent_250d = [d.df.iloc[-251:] for d in data_list]
         self.transform(data_list)
         addible_data = self.merge(data_list)
         dataset_func = self.define_dataset_func(dataset_type)

@@ -22,6 +22,11 @@ class ToNumpy(BaseTransform):
         return np.array(x)
 
 
+class RandomLike(BaseTransform):
+    def forward(self, x):
+        return np.random.randn(*x.shape)
+
+
 class ToDataFrame(BaseTransform):
     def __init__(self, idx, columns):
         self.idx = idx
