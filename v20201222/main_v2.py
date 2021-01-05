@@ -15,7 +15,7 @@ import GPUtil
 # from ray.tune.schedulers import ASHAScheduler
 
 from v20201222.logger_v2 import Logger
-from v20201222.model_v2_bond import MyModel, load_model, save_model
+from v_latest.model_v2_bond import MyModel, load_model, save_model
 from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
 from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
@@ -105,8 +105,8 @@ class Configs:
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 0.5, 'cost': 10., 'entropy': 0.0}
-        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 5., 'cost': 100., 'entropy': 0.0}
+        self.loss_wgt = {'y_pf': 10, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.002, 'cost': 0.01, 'entropy': 0.001}
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -299,6 +299,8 @@ class Trainer:
                     # if adaptive_flag, reset to False and corresponding parameters
                     adaptive_flag = self.set_adaptive_configs(False)
                     # c.plot_freq = 1
+                    for _ in range(10):
+                        self.train(t)
                 else:
                     assert not early_stopped
 
@@ -740,7 +742,7 @@ def main(testmode=False, args=None):
                            # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
                            # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
                            # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],]:
-                for key in ['l', 'm','h', 'eq']:
+                for key in ['m', 'l', 'h', 'eq']:
                 # m_data_raw = MacroData('macro_data_20201222.txt')
                 # for m in m_data_raw.columns:
                 #     m_data = MacroData('macro_data_20201222.txt')
@@ -750,12 +752,12 @@ def main(testmode=False, args=None):
                     aa = ''
                     aa_str = '-'.join(aa)
                     # key = 'eq'
-                    lr = 0.1
+                    # lr = 0.1
                     # configs & variables
                     if args is not None:
-                        name = '{}_{}'.format(args.prefix, key+str(lr)+aa_str)
+                        name = '{}_{}'.format(args.prefix, key+aa_str)
                     else:
-                        name = '{}'.format(key + str(lr) + aa_str)
+                        name = '{}'.format(key + aa_str)
 
                     # name = 'app_adv_1'
                     c = Configs(name)
@@ -814,6 +816,7 @@ def main(testmode=False, args=None):
                     select = False
                     if select is True:
                         c.loss_wgt['mdd_pf'] = 0.1
+                        lr = 0.1
                         c.lr = lr
 
                         a_data = AssetData('asset_data_us_ext_20201222.txt')
@@ -858,8 +861,9 @@ def main(testmode=False, args=None):
                         else:
                             raise NotImplementedError
 
+                    if args is not None and args.model_load:
+                        c.load(model_path)
 
-                    c.load(model_path)
                     str_ = c.export()
                     with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                         f.write(str_)
@@ -939,6 +943,7 @@ def load_and_run(key, model_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--model_load', action='store_true')
     parser.add_argument('--prefix', default='test', type=str)
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--base_key', default='eq', type=str)
@@ -958,3 +963,7 @@ if __name__ == '__main__':
         # eq: test_20201222_01_eq
     # income()
 
+# train
+# python -m v20201222.main_v2 --prefix=newmodel
+# test
+# python -m v20201222.main_v2 --prefix=newmodel2 --test --base_key=eq model_path=./out/test_20201222_01_l/3900_0

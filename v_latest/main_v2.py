@@ -13,10 +13,10 @@ import GPUtil
 # from ray import tune
 # from ray.tune.schedulers import ASHAScheduler
 
-from v_latest.logger_v2 import Logger
-from v_latest.model_v2 import MyModel, load_model, save_model
-from v_latest.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
-from v_latest.optimizer_v2 import RAdam
+from v20201222.logger_v2 import Logger
+from v_latest.model_v2_bond import MyModel, load_model, save_model
+from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
+from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
 
 # # #### profiler start ####
@@ -34,115 +34,6 @@ except AttributeError:
 
 
 # # #### profiler end ####
-
-
-class Configs:
-    def __init__(self, name):
-        self.comment = """
-        non_cash only
-        """
-
-        self.seed = 1000
-        self.name = name
-        self.pre_lr = 5e-3
-        self.lr = 5e-2
-        self.batch_size = 512
-        self.num_epochs = 1000
-        self.base_i0 = 2000
-        self.mc_samples = 1000
-        self.sampling_freq = 20
-        self.k_days = 20
-        self.label_days = 20
-        self.strategy_days = 250
-
-        # adaptive / earlystopping
-        self.adaptive_flag = True
-        self.adaptive_count = 10
-        self.adaptive_lrx = 5  # learning rate * 배수
-        self.es_max_count = 200
-
-        self.retrain_days = 240
-        self.test_days = 5000  # test days
-        self.init_train_len = 500
-        self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data
-        self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
-        self.adv_train = True
-        self.n_pretrain = 5
-        self.max_entropy = True
-
-        self.loss_threshold = None  # -1
-
-        self.datatype = 'app'
-        # self.datatype = 'inv'
-
-        self.cost_rate = 0.003
-        self.plot_freq = 10
-        self.eval_freq = 1  # 20
-        self.save_freq = 20
-        self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
-
-        # self.hidden_dim = [72, 48, 32]
-        self.hidden_dim = [128, 64, 64]
-        self.alloc_hidden_dim = [128, 64]
-        self.dropout_r = 0.3
-
-        self.random_guide_weight = 0.1
-        self.random_flip = 0.1  # flip sign
-        self.random_label = 0.1  # random sample from dist.
-
-        self.clip = 1.
-
-        # logger
-        self.log_level = 'DEBUG'
-
-        ## attention
-        self.d_model = 128
-        self.n_heads = 8
-        self.d_k = self.d_v = self.d_model // self.n_heads
-        self.d_ff = 128
-
-        ## FiLM
-        self.use_condition_network = True
-        self.film_hidden_dim = [16, 16]
-
-        # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
-        self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 0.5, 'cost': 10., 'entropy': 0.0}
-        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
-        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
-
-        # default
-        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.02, 'cost': 1., 'entropy': 0.001}
-        # good balance
-        # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.0002,
-        #                       'cost': 2., 'entropy': 0.0001}
-        self.init()
-        self.set_path()
-
-    def init(self):
-        self.init_weight()
-
-    def init_weight(self):
-        if self.datatype == 'app':
-            self.cash_idx = 3
-            self.base_weight = [0.25, 0.1, 0.05, 0.6]
-        else:
-            self.cash_idx = 0
-            self.base_weight = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
-            # self.base_weight = None
-
-    def set_path(self):
-        self.outpath = './out/{}/'.format(self.name)
-        os.makedirs(self.outpath, exist_ok=True)
-
-    def export(self):
-        return_str = ""
-        for key in self.__dict__.keys():
-            return_str += "{}: {}\n".format(key, self.__dict__[key])
-
-        return return_str
 
 
 def calc_y(wgt0, y1, cost_r=0.):
@@ -631,12 +522,12 @@ class Trainer:
 
     def plot_macro(self, outpath):
         _, m_data = self.dataset_manager._original_recent_250d
-        for col in m_data.columns:
+        for c in m_data.columns:
             fig = plt.figure()
-            plt.plot(m_data[col])
+            plt.plot(m_data[c])
             plt.xticks(np.arange(0, len(m_data), 50), m_data.index[::50])
-            plt.title(col)
-            fig.savefig(os.path.join(outpath, '{}.png'.format(col)))
+            plt.title(c)
+            fig.savefig(os.path.join(outpath, '{}.png'.format(c)))
             plt.close(fig)
 
     def run_all(self):
@@ -693,29 +584,40 @@ def main(testmode=False, args=None):
                        m=[0.4, 0.1, 0.075, 0.425],
                        l=[0.25, 0.05, 0.05, 0.65],
                        eq=[0.25, 0.25, 0.25, 0.25])
+    # # 실제
+    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
+    #                    m=[0.45, 0.15, 0.075, 0.325],
+    #                    l=[0.30, 0.1, 0.05, 0.55],
+    #                    eq=[0.25, 0.25, 0.25, 0.25])
+
+    # 검증
+    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
+    #                    m=[0.4, 0.15, 0.075, 0.375],
+    #                    l=[0.25, 0.1, 0.05, 0.6],
+    #                    eq=[0.25, 0.25, 0.25, 0.25])
 
     # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
     # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
     #     for key in ['m','l','h','eq',]:
     # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
     for seed, suffix in zip([123], ["_0"]):
-        # for aa in [  # ['spx500','bbusagtr'],
-        #     ['gscigold', 'bbusagtr'],
-            # ['spx500', 'gscigold', 'bbusagtr'],
-            # ['spx500', 'russell2000', 'gscigold', 'bbusagtr'],
-            # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
-            # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
-            # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],]:
-        for key in ['eq']:
+        # for aa in [# ['spx500','bbusagtr'],
+        #             ['gscigold','bbusagtr'],
+        # ['spx500', 'gscigold', 'bbusagtr'],
+        # ['spx500', 'russell2000', 'gscigold', 'bbusagtr'],
+        # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
+        # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
+        # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],]:
+        for key in ['l', 'm', 'h', 'eq']:
             # m_data_raw = MacroData('macro_data_20201222.txt')
             # for m in m_data_raw.columns:
             #     m_data = MacroData('macro_data_20201222.txt')
             # m = ['usyc3m2y index','gdp cury index','cl1 comdty','indu index']
             # m_data.df = m_data.df.loc[:, m]
             # m_data.columns = m
-            aa = ['']
+            aa = ''
             aa_str = '-'.join(aa)
-            key = 'eq'
+            # key = 'eq'
             lr = 0.1
             # configs & variables
             if args is not None:
@@ -737,20 +639,27 @@ def main(testmode=False, args=None):
 
                 c.mdd_cp = 0.1
                 c.lr = 2e-2
+                model_path = './out/test_20201222_01_h/3900_0'
 
+                # l: ./out/test_20201222_01_l/3900_0
+                # m: test_20201222_01_m
+                # h: test_20201222_01_h
+                # eq: test_20201222_01_eq
             elif key == 'm':
                 c.loss_wgt['wgt_guide'] = 0.02
                 # c.wgt_range = 0.08 * 2
-                c.wgt_range_min = [0.2, 0.05, 0.01, 0.2]
-                c.wgt_range_max = [0.8, 0.8, 0.15, 1.]
+                c.wgt_range_min = [0.2, 0.05, 0.01, 0.4]
+                c.wgt_range_max = [0.65, 0.65, 0.15, 0.6]
 
                 c.mdd_cp = 0.05
+                model_path = './out/test_20201222_01_m/3900_0'
             elif key == 'l':
                 c.loss_wgt['wgt_guide'] = 0.02
                 # c.wgt_range = 0.24 * 2
-                c.wgt_range_min = [0.1, 0.02, 0., 0.4]
-                c.wgt_range_max = [0.5, 0.5, 0.1, 1.]
+                c.wgt_range_min = [0.1, 0.02, 0., 0.6]
+                c.wgt_range_max = [0.45, 0.45, 0.1, 0.8]
                 c.mdd_cp = 0.03
+                model_path = './out/test_20201222_01_l/3900_0'
             else:
                 # c.loss_wgt['wgt_guide'] = 0.0
                 # c.wgt_range = 0.99
@@ -758,6 +667,7 @@ def main(testmode=False, args=None):
                 c.wgt_range_min = [0., 0., 0., 0.]
                 c.wgt_range_max = [1., 1., 1., 1.]
                 c.mdd_cp = 0.05
+                model_path = './out/test_20201222_01_eq/3900_0'
 
             # seed
             random.seed(c.seed)
@@ -766,7 +676,7 @@ def main(testmode=False, args=None):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
-            select = True
+            select = False
             if select is True:
                 c.loss_wgt['mdd_pf'] = 0.1
                 c.lr = lr
@@ -789,7 +699,7 @@ def main(testmode=False, args=None):
                 c.wgt_range_max = [1.] * len(aa)
                 ii = 3500
             else:
-                c.cash_idx = 2
+                c.cash_idx = 3
                 # data processing
                 if c.cash_idx == 2:
                     # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
@@ -800,8 +710,8 @@ def main(testmode=False, args=None):
 
                     ii = 3500
                 elif c.cash_idx == 3:
-                    data_list = [AplusData('app_data_20201222.txt'), MacroData('macro_data_20201222.txt')]
-                    ii = 3500
+                    data_list = [AplusData('app_data_20201230.txt'), MacroData('macro_data_20210104.txt')]
+                    ii = 3900
                 elif c.cash_idx == 7:
                     data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
                     ii = 3500
@@ -813,6 +723,7 @@ def main(testmode=False, args=None):
                 else:
                     raise NotImplementedError
 
+            c.load(model_path)
             str_ = c.export()
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
@@ -821,8 +732,8 @@ def main(testmode=False, args=None):
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
 
             trainer = Trainer(c, dm)
-            trainer.run_all()
-            # trainer.run(ii)
+            # trainer.run_all()
+            trainer.run(ii)
             # train(c, model, optimizer, dm, 3489)
             # train(c, model, optimizer, sampler, t=1700)
 
@@ -872,7 +783,7 @@ def load_and_run(key, model_path):
     # seed
     tu.set_seed(c.seed)
 
-    data_list = [AplusData('app_data_20210104.txt'), MacroData('macro_data_20210104.txt')]
+    data_list = [AplusData('app_data_20201230.txt'), MacroData('macro_data_20210104.txt')]
     dm = DatasetManager(data_list, c.test_days, c.batch_size)
     trainer = Trainer(c, dm)
     trainer.load_model(model_path)
@@ -907,3 +818,4 @@ if __name__ == '__main__':
         # h: test_20201222_01_h
         # eq: test_20201222_01_eq
     # income()
+
