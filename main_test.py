@@ -65,7 +65,7 @@ class Configs:
         self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data
+        self.normalizing_window = 500  # norm windows for macro data_conf
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.adv_train = True
@@ -83,7 +83,7 @@ class Configs:
         self.eval_freq = 1 # 20
         self.save_freq = 20
         self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
+        self.use_guide_wgt_as_prev_x = False  # models / forward_with_loss
 
         self.hidden_dim = [72, 48, 32]
         self.alloc_hidden_dim = [32, 32]
@@ -194,7 +194,7 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
     guide_weight=c.base_weight
     """
 
-    # ep=0; n_samples = 100; k_days = 20; model, features, labels, insample_boundary = main(testmode=True)
+    # ep=0; n_samples = 100; k_days = 20; models, features, labels, insample_boundary = main(testmode=True)
     # features, labels = test_features, test_labels
     # features, labels = test_insample_features, test_insamples_labels
     features_prev, labels_prev, features, labels = dataset
@@ -320,7 +320,7 @@ def plot_each(ep, sampler, model, dataset, insample_boundary=None, guide_date=No
 
     x = np.arange(len(y_base))
 
-    # save data
+    # save data_conf
     df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
     date_test_selected = ((date_[r_::k_days] >= guide_date[-2]) & (date_[r_::k_days] < guide_date[-1]))
@@ -551,7 +551,7 @@ def backtest(configs, sampler, suffix=""):
 
     wgt_date = list()
 
-    # model & optimizer
+    # models & optimizer
     model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
     optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
     model.to(tu.device)
@@ -650,7 +650,7 @@ def train(configs, model, optimizer, sampler, t=None):
         losses_dict = {'train': np.zeros([c.num_epochs]), 'eval': np.zeros([c.num_epochs]), 'test': np.zeros([c.num_epochs])}
 
         if c.model_init_everytime:
-            # ################ model & optimizer in loop  # load 무시, 매 타임 초기화 ################
+            # ################ models & optimizer in loop  # load 무시, 매 타임 초기화 ################
             model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
             model.train()
             model.to(tu.device)
@@ -665,7 +665,7 @@ def train(configs, model, optimizer, sampler, t=None):
         # schedule = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=c.lr, max_lr=1e-2, gamma=1, last_epoch=-1)
         # schedule = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1/10, last_epoch=-1)
 
-        # ################ data processing in loop ################
+        # ################ data_conf processing in loop ################
         dataset_cpu, dataset = {}, {}
         f_prev_dict, l_prev_dict, f_dict, l_dict = {}, {}, {}, {}
         dataset_cpu['train'], dataset_cpu['eval'], dataset_cpu['test'], (dataset_cpu['test_insample'], insample_boundary), guide_date = sampler.get_batch(t)
@@ -709,7 +709,7 @@ def train(configs, model, optimizer, sampler, t=None):
 
                 str_ = "(es_count:{} / min_loss:{}) ".format(c.es_count, c.min_eval_loss)
                 # for i_loss, key in enumerate(c.loss_list):
-                #     str_ += "{}: l{:2.2f} w{:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key])), tu.np_ify(model.loss_logvars[i_loss]))
+                #     str_ += "{}: l{:2.2f} w{:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key])), tu.np_ify(models.loss_logvars[i_loss]))
 
                 for key in losses_eval_dict.keys():
                     str_ += "{}: {:2.2f} / ".format(key, float(tu.np_ify(losses_eval_dict[key]) * loss_wgt[key]))
@@ -852,16 +852,16 @@ def main(testmode=False):
                        l=[0.30, 0.1, 0.05, 0.55],
                        eq=[0.25, 0.25, 0.25, 0.25])
     # 검증
-    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-    #                    m=[0.4, 0.15, 0.075, 0.375],
+    # base_weight = dict(app_h.yaml=[0.69, 0.2, 0.1, 0.01],
+    #                    app_m.yaml=[0.4, 0.15, 0.075, 0.375],
     #                    l=[0.25, 0.1, 0.05, 0.6],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
     # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-        # for key in ['m','l','h','eq',]:
+        # for key in ['app_m.yaml','l','app_h.yaml','eq',]:
     for seed, suffix in zip([100], ["_0"]):
         for key in ['l']:
-            # configs & variables
+            # conf & variables
             name = 'adata0615_replicate_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
@@ -878,11 +878,11 @@ def main(testmode=False):
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
 
-            # data processing
+            # data_conf processing
             features_dict, labels_dict, add_info = get_data(configs=c)
             sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
 
-            # model & optimizer
+            # models & optimizer
             model = MyModel(sampler.n_features, sampler.n_labels, configs=c)
             optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
             load_model(c.outpath, model, optimizer)
@@ -890,7 +890,7 @@ def main(testmode=False):
             model.to(tu.device)
 
             train(c, model, optimizer, sampler, 3489)
-            # train(c, model, optimizer, sampler, t=1700)
+            # train(c, models, optimizer, sampler, t=1700)
 
             backtest(c, sampler, suffix)
 
@@ -901,5 +901,5 @@ def main(testmode=False):
     #
     #     test_features_insample, test_labels_insample = tu.to_device(tu.device, [test_features_insample, test_labels_insample])
     #
-    #     plot_each(0, model, test_features_insample, test_labels_insample, insample_boundary=insample_boundary,
+    #     plot_each(0, models, test_features_insample, test_labels_insample, insample_boundary=insample_boundary,
     #               n_samples=n_samples, rebal_freq=rebal_freq, suffix=t, outpath=outpath)

@@ -1,10 +1,13 @@
-import random
+
 import numpy as np
+import os
+import random
 import torch
 
 
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 # device = 'cpu'
+
 
 def set_seed(seed):    
     random.seed(seed)
@@ -12,7 +15,6 @@ def set_seed(seed):
     torch.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
 
 
 def from_numpy(*args, **kwargs):
@@ -51,3 +53,45 @@ def to_device(device, list_to_device):
             raise NotImplementedError
 
     return list_to_device
+
+
+def save_model(path, ep, model, optimizer):
+    save_path = os.path.join(path, "saved_model.pt")
+    torch.save({
+        'ep': ep,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, save_path)
+    print('models saved successfully. ({})'.format(path))
+
+
+def load_model(path, model, optimizer):
+    load_path = os.path.join(path, "saved_model.pt")
+    if not os.path.exists(load_path):
+        return False
+
+    checkpoint = torch.load(load_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.to(tu.device)
+    model.eval()
+    print('models loaded successfully. ({})'.format(path))
+    return checkpoint['ep']
+
+
+def use_profile():
+    # # #### profiler start ####
+    import builtins
+
+    try:
+        builtins.profile
+    except AttributeError:
+        # No line profiler, provide a pass-through version
+        def profile(func):
+            return func
+
+        builtins.profile = profile

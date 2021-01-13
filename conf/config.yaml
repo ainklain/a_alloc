@@ -1,0 +1,120 @@
+hydra:
+  run:
+    dir: out/${model.name}/${experiment.name}/
+
+
+####################################################################
+# set configs
+####################################################################
+defaults:
+  - model_conf@_global_: base
+  - data_conf@_global_: app
+  - exp_conf@experiment: eq
+  - exp_conf/data_exp_conf@experiment: ${defaults.1.data_conf}_${defaults.2.exp_conf}
+
+####################################################################
+# data configs (default)
+####################################################################
+data:
+  update: 20201230
+  outpath: ./out/${model.name}/${experiment.name}/
+
+  sampling_freq: 20
+  k_days: 20
+  label_days: 20
+  strategy_days: 250
+
+  retrain_days: 240
+  test_days: 5000  # test days
+  init_train_len: 500
+  train_data_len: 2000
+  normalizing_window: 500  # norm windows for macro data_conf
+  use_accum_data: True  # [sampler] 데이터 누적할지 말지
+
+####################################################################
+# model configs (default)
+####################################################################
+model:
+  name: model_v2
+  mc_samples: 1000
+
+  hidden_dim:
+    - 128
+    - 64
+    - 64
+    -
+  alloc_hidden_dim:
+    - 128
+    - 64
+    -
+  dropout_r: 0.3
+
+  ## attention
+  d_model: 128
+  n_heads: 8
+  d_k: 16  # d_model / n_heads
+  d_v: 16  # d_model / n_heads
+  d_ff: 128
+
+  loss_list:
+    - 'y_pf'
+    - 'mdd_pf'
+    - 'logy'
+    - 'wgt_guide'
+    - 'cost'
+    - 'entropy'
+
+  adaptive_loss_wgt:
+    'y_pf': 0.0
+    'mdd_pf': 0.0
+    'logy': 0.0
+    'wgt_guide': 0.5
+    'cost': 10.0
+    'entropy': 0.0
+
+  loss_wgt:
+    'y_pf': 1
+    'mdd_pf': 1.0
+    'logy': 1.0
+    'wgt_guide': 0.02
+    'cost': 1.0
+    'entropy': 0.001
+
+####################################################################
+# trainer configs (default)
+####################################################################
+trainer:
+  adaptive_flag: True
+  adaptive_count: 10
+  adaptive_lrx: 5  # learning rate * 배수
+  es_max_count: 200
+  loss_threshold: None  # -1
+  cost_rate: 0.003
+  plot_freq: 10
+  eval_freq: 1  # 20
+  save_freq: 20
+  model_init_everytime: False
+  use_guide_wgt_as_prev_x: False  # models / forward_with_loss
+
+  random_guide_weight: 0.1
+  random_flip: 0.1  # flip sign
+  random_label: 0.1  # random sample from dist.
+
+  clip: 1.
+
+####################################################################
+# experiment configs (default)
+####################################################################
+experiment:
+  seed: 1000
+  pre_lr: 0.005
+  lr: 0.05
+  batch_size: 512
+  num_epochs: 1000
+  base_i0: 2000
+
+  adv_train: False #True
+  n_pretrain: 5
+  max_entropy: True
+
+

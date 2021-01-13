@@ -503,7 +503,7 @@ def main():
     # x_raw = next(iter(train_loader)).float()
     # batch_size, _, seq_len = x.shape
     model = MyModel()
-    # model = MyModel_cpc(timestep=40, seq_len=len(train_loader.dataset[0]), dim_hidden=64)
+    # models = MyModel_cpc(timestep=40, seq_len=len(train_loader.dataset[0]), dim_hidden=64)
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
@@ -571,7 +571,7 @@ def main_simple():
     # x_raw = next(iter(train_loader)).float()
     # batch_size, _, seq_len = x.shape
     model = MyModel_simple()
-    # model = MyModel_cpc(timestep=40, seq_len=len(train_loader.dataset[0]), dim_hidden=64)
+    # models = MyModel_cpc(timestep=40, seq_len=len(train_loader.dataset[0]), dim_hidden=64)
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     finetune_optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)

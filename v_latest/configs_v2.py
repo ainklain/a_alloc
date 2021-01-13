@@ -32,7 +32,7 @@ class Configs:
         self.test_days = 5000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data
+        self.normalizing_window = 500  # norm windows for macro data_conf
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
         self.adv_train = True
         self.n_pretrain = 5
@@ -48,7 +48,7 @@ class Configs:
         self.eval_freq = 1  # 20
         self.save_freq = 20
         self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
+        self.use_guide_wgt_as_prev_x = False  # models / forward_with_loss
 
         # self.hidden_dim = [72, 48, 32]
         self.hidden_dim = [128, 64, 64]

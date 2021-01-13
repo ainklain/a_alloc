@@ -753,7 +753,7 @@ class MyModel_original(Module):
         """
         # self.train()
         # Just copies type from x, initializes new vector
-        # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
+        # predictions = x.data_conf.new(n_samples, x.shape[0], self.out_dim)
         #
         # for i in range(n_samples):
         #     y = self.forward(x, sample=True)
@@ -991,7 +991,7 @@ def save_model(path, ep, model, optimizer):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, save_path)
-    print('model saved successfully. ({})'.format(path))
+    print('models saved successfully. ({})'.format(path))
 
 
 def load_model(path, model, optimizer):
@@ -1008,5 +1008,5 @@ def load_model(path, model, optimizer):
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(tu.device)
     model.eval()
-    print('model loaded successfully. ({})'.format(path))
+    print('models loaded successfully. ({})'.format(path))
     return checkpoint['ep']

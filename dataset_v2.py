@@ -99,7 +99,7 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
     """
     MultiTaskDatasetForMultiTimesteps(AplusData())
     [asssigned from Base]
-    - data      : arr, idx, columns, label_columns_dict
+    - data_conf      : arr, idx, columns, label_columns_dict
     - parameter : sampling_days, k_days
     """
     def __init__(self, addible_data, *args, window=250, pos_embedding=True, **kwargs):
@@ -138,7 +138,7 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
         out['labels_prev'] = dict([(key, labels_prev_base[-1, self.label_columns_idx(key)])
                                    for key in self.label_columns_dict.keys()])
 
-        if i >= self.default_range[1] or i < self.default_range[0]: # very recent data
+        if i >= self.default_range[1] or i < self.default_range[0]: # very recent data_conf
             out['labels'] = out['labels_prev'] # dummy. not used. 
             # out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
             #                       for key in self.label_columns_dict.keys()])

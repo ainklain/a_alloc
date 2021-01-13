@@ -298,11 +298,11 @@ class MyModel(Module):
         self.out_dim = n_assets
         self.c = c
 
-        # attentive model
+        # attentive models
         self.conv_emb = layer.ConvEmbeddingLayer(n_features, c.d_model)
         self.attentive_model = AttentiveLatentModel(c.d_k, c.d_v, c.d_model, c.d_ff, c.n_heads, c.dropout_r)
 
-        # mc dropout model
+        # mc dropout models
         # self.expected_return_estimator = ExpectedReturnEstimator(n_features, n_assets, c.hidden_dim)
         self.expected_return_estimator = ExpectedReturnEstimator(c.d_model, n_assets, c.hidden_dim)
 
@@ -330,7 +330,7 @@ class MyModel(Module):
         # positional & conv embeding
         x_emb = self.conv_emb(x)
 
-        # attentive model
+        # attentive models
         x_attn = self.attentive_model(x_emb)
 
         # expected return estimation
@@ -571,7 +571,7 @@ class MyModel_original(Module):
         """
         # self.train()
         # Just copies type from x, initializes new vector
-        # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
+        # predictions = x.data_conf.new(n_samples, x.shape[0], self.out_dim)
         #
         # for i in range(n_samples):
         #     y = self.forward(x, sample=True)
@@ -809,7 +809,7 @@ def save_model(path, ep, model, optimizer):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, save_path)
-    print('model saved successfully. ({})'.format(path))
+    print('models saved successfully. ({})'.format(path))
 
 
 def load_model(path, model, optimizer):
@@ -826,7 +826,7 @@ def load_model(path, model, optimizer):
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(tu.device)
     model.eval()
-    print('model loaded successfully. ({})'.format(path))
+    print('models loaded successfully. ({})'.format(path))
     return checkpoint['ep']
 
 

@@ -48,7 +48,7 @@ class TSEncoder(Module):
 class Encoder(Module):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
                  max_seq_len, dropout=0.1, weighted=False):
-        # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model
+        # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = conf.n_layers, conf.d_k, conf.d_v, conf.d_model, conf.d_ff, conf.n_heads, conf.max_input_seq_len, conf.dropout, conf.weighted_model
         super(Encoder, self).__init__()
         self.d_model = d_model
         self.pos_emb = PosEncoding(d_model, dropout=dropout, max_len=max_seq_len * 2)  # TODO: *10 fix
@@ -777,7 +777,7 @@ class MyModel_original(Module):
         """
         # self.train()
         # Just copies type from x, initializes new vector
-        # predictions = x.data.new(n_samples, x.shape[0], self.out_dim)
+        # predictions = x.data_conf.new(n_samples, x.shape[0], self.out_dim)
         #
         # for i in range(n_samples):
         #     y = self.forward(x, sample=True)
@@ -1015,7 +1015,7 @@ def save_model(path, ep, model, optimizer):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, save_path)
-    print('model saved successfully. ({})'.format(path))
+    print('models saved successfully. ({})'.format(path))
 
 
 def load_model(path, model, optimizer):
@@ -1032,5 +1032,5 @@ def load_model(path, model, optimizer):
             if isinstance(v, torch.Tensor):
                 state[k] = v.to(tu.device)
     model.eval()
-    print('model loaded successfully. ({})'.format(path))
+    print('models loaded successfully. ({})'.format(path))
     return checkpoint['ep']

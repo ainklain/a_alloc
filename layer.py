@@ -85,7 +85,7 @@ class Base(nn.Module):
                 params_len = len(c[1].params2vec(requires_grad_only))
                 wgt, params_pos = self.split_wgt(weights_list, params_pos, params_len)
 
-            # model, weights_list 순서
+            # models, weights_list 순서
             children_dict[c[0]] = dict(m=c[1], w=wgt)
 
         return children_dict
@@ -611,7 +611,7 @@ class WeightedDecoderLayer(Base):
 class Encoder(Base):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
                  max_seq_len, dropout=0.1, weighted=False):
-        # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model
+        # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = conf.n_layers, conf.d_k, conf.d_v, conf.d_model, conf.d_ff, conf.n_heads, conf.max_input_seq_len, conf.dropout, conf.weighted_model
         super(Encoder, self).__init__()
         self.d_model = d_model
         self.pos_emb = PosEncoding(d_model, dropout=dropout, max_len=max_seq_len * 2)  # TODO: *10 fix
@@ -771,7 +771,7 @@ class TSModel(Base):
         self.weight_scheme = weight_scheme
 
         self.input_seq_size = c.m_days // c.sampling_days + 1
-        # self.output_seq_size = configs.k_days // configs.sampling_days
+        # self.output_seq_size = conf.k_days // conf.sampling_days
         self.output_seq_size = 1
 
         self.conv_embedding = ConvEmbeddingLayer(n_features=c.embedding_size, d_model=c.d_model)
@@ -808,8 +808,8 @@ class TSModel(Base):
                             if c.use_uncertainty:
                                 self.predictor_var[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
                             self.predictor_helper[key] = c.features_structure['regression']['logp_base']['logy'].index(c.k_days)
-                        # elif tags[0] in configs.features_structure['crosssection'].keys():
-                        #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
+                        # elif tags[0] in conf.features_structure['crosssection'].keys():
+                        #     self.predictor[key] = FeedForward(64, len(conf.features_structure['regression'][key]))
 
         self.features_cls = features_cls
 

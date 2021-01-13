@@ -42,8 +42,8 @@ def strategy_based_label(log_p, n, cash_idx=0, base_weight=None):
         m = np.nanmean(y[max(0, t-n+1):(t+1)], axis=0, keepdims=True)
         s = np.nanstd(y[max(0, t-n+1):(t+1)], axis=0, ddof=1, keepdims=True) + 1e-6
 
-        # F = 1 + np.tanh(np.sqrt(250) * (m / s))
-        # F = np.tanh(np.minimum(1, m / s ** 2)) + 1
+        # F = 1 + np.tanh(np.sqrt(250) * (app_m.yaml / s))
+        # F = np.tanh(np.minimum(1, app_m.yaml / s ** 2)) + 1
 
         if base_weight is None:
             # kelly based label (equal)
@@ -75,7 +75,7 @@ def strategy_based_label(log_p, n, cash_idx=0, base_weight=None):
         #     # min_base_weight[cash_filter] = 1.
         #
         #     # kelly based label (equal)
-        #     F = np.tanh(m / s ** 2) + 1
+        #     F = np.tanh(app_m.yaml / s ** 2) + 1
         #     nan_filter = np.isnan(F)
         #     n_asset = log_p.shape[1] - np.sum(nan_filter)
         #     F[nan_filter] = 0.
@@ -126,14 +126,14 @@ def get_data(configs):
 
     delete_nan = 500
 
-    # get data
-    macro_data = pd.read_csv('./data/macro_data.txt', index_col=0, sep='\t')
+    # get data_conf
+    macro_data = pd.read_csv('./data_conf/macro_data.txt', index_col=0, sep='\t')
     macro_data['copper_gold_r'] = macro_data['HG1 Comdty'] / macro_data['GC1 Comdty']
 
     if c.datatype == 'app':
-        idx_data = pd.read_csv('./data/app_data.txt', index_col=0, sep='\t')
+        idx_data = pd.read_csv('./data_conf/app_data.txt', index_col=0, sep='\t')
     else:
-        idx_data = pd.read_csv('./data/index_data.txt', index_col=0, sep='\t')
+        idx_data = pd.read_csv('./data_conf/index_data.txt', index_col=0, sep='\t')
 
     min_begin_i = np.max(np.isnan(idx_data).sum(axis=0)) + 1
 
@@ -184,7 +184,7 @@ def get_data(configs):
     add_info['calc_days'] = calc_days
     add_info['min_begin_i'] = min_begin_i
 
-    # truncate unlabeled data
+    # truncate unlabeled data_conf
     label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_for_calc'])])
     for key in labels_dict.keys():
         labels_dict[key] = labels_dict[key][:label_len]

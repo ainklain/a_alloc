@@ -14,8 +14,12 @@ import GPUtil
 # from ray import tune
 # from ray.tune.schedulers import ASHAScheduler
 
+""""""
+
+
 from v20201222.logger_v2 import Logger
-from v_latest.model_v2_bond import MyModel, load_model, save_model
+# from v_latest.model_v2_bond import MyModel, load_model, save_model
+from v_latest.model_v2_bond import load_model, save_model
 from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
 from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
@@ -61,9 +65,9 @@ class Configs:
         self.test_days = 5000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data
+        self.normalizing_window = 500  # norm windows for macro data_conf
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
-        self.adv_train = True
+        self.adv_train = False #True
         self.n_pretrain = 5
         self.max_entropy = True
 
@@ -77,7 +81,7 @@ class Configs:
         self.eval_freq = 1  # 20
         self.save_freq = 20
         self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
+        self.use_guide_wgt_as_prev_x = False  # models / forward_with_loss
 
         # self.hidden_dim = [72, 48, 32]
         self.hidden_dim = [128, 64, 64]
@@ -105,8 +109,12 @@ class Configs:
 
         # self.loss_wgt = {'y_pf': 1., 'mdd_pf': 1., 'logy': 1., 'wgt': 0., 'wgt2': 0.01, 'wgt_guide': 0., 'cost': 0., 'entropy': 0.}
         self.loss_list = ['y_pf', 'mdd_pf', 'logy', 'wgt_guide', 'cost', 'entropy']
-        self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 5., 'cost': 100., 'entropy': 0.0}
-        self.loss_wgt = {'y_pf': 10, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.002, 'cost': 0.01, 'entropy': 0.001}
+        # self.adaptive_loss_wgt = {'y_pf': 0., 'mdd_pf': 0., 'logy': 0., 'wgt_guide': 5., 'cost': 100., 'entropy': 0.0}
+        # self.loss_wgt = {'y_pf': 10, 'mdd_pf': 1., 'logy': 1., 'wgt_guide': 0.002, 'cost': 0.01, 'entropy': 0.001}
+        self.adaptive_loss_wgt = {'y_pf': 0.0, 'mdd_pf': 0.0, 'logy': 0.0, 'wgt_guide': 0.5, 'cost': 10.0, 'entropy': 0.0}
+        self.loss_wgt = {'y_pf': 1, 'mdd_pf': 1.0, 'logy': 1.0, 'wgt_guide': 0.02, 'cost': 1.0, 'entropy': 0.001}
+
+
         # self.adaptive_loss_wgt = {'y_pf': 1, 'mdd_pf': 1000., 'logy': 1., 'wgt': 0., 'wgt2': 0., 'wgt_guide': 0.01, 'cost': 1., 'entropy': 0.001}
 
         # default
@@ -205,7 +213,7 @@ class Trainer:
 
         dm = self.dataset_manager
         self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
-        # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
+        # self.optimizer = torch.optim.Adam(self.models.parameters(), lr=c.lr, weight_decay=0.01)
         self.pre_optimizer = RAdam(self.model.parameters(), lr=pre_lr, weight_decay=0.01)
         self.post_optimizer = RAdam(self.model.parameters(), lr=lr, weight_decay=0.01)
         self.optimizer = None
@@ -354,11 +362,11 @@ class Trainer:
             if it_ > n_batch_per_epoch:
                 break
 
-            # use adversarial training (data augmentation)
+            # use adversarial training (data_conf augmentation)
             if c.adv_train is True:
                 x = self.model.adversarial_noise(data_dict)
 
-            # run model and training
+            # run models and training
             out = self.model.forward_with_loss(data_dict, losses_wgt_fixed=self.losses_wgt_fixed)
             if not out:
                 continue
@@ -370,7 +378,7 @@ class Trainer:
             self.optimizer.zero_grad()
             losses.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), c.clip)
-            # print([(n, x.grad) for n, x in list(self.model.named_parameters())])
+            # print([(n, x.grad) for n, x in list(self.models.named_parameters())])
             self.optimizer.step()
 
         return losses_sum
@@ -384,7 +392,7 @@ class Trainer:
 
         losses_sum = 0
         losses_dict = dict()
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
 
         with torch.set_grad_enabled(False):
             for data_dict in dataloader:
@@ -418,7 +426,7 @@ class Trainer:
         dataloader = self.dataset_manager.get_data_loader(t, mode)
         losses_sum = 0
 
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
         with torch.set_grad_enabled(False):
             # store predicted wgts and t+1 returns of assets
             wgt = torch.zeros(len(dataloader.dataset), len(self.dataset_manager.labels_list)).to(tu.device)
@@ -485,7 +493,7 @@ class Trainer:
 
         x = np.arange(len(y_guide))
 
-        # save data
+        # save data_conf
         df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
         date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
@@ -683,7 +691,7 @@ def income():
         for key in ['l','m','h','eq',]:
     # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
     #     for key in ['m']:
-            # configs & variables
+            # conf & variables
             name = 'income01_k20_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
@@ -701,7 +709,7 @@ def income():
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
 
-            # data processing
+            # data_conf processing
 
             data_list = [IncomeData(), MacroData()]
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
@@ -733,8 +741,8 @@ def main(testmode=False, args=None):
             # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
             # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
             #     for key in ['m','l','h','eq',]:
-            # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
-            for seed, suffix in zip([123], ["_0"]):
+            for seed, suffix in zip([100, 1000], ["_0", "_1"]):
+            # for seed, suffix in zip([123], ["_0"]):
                 # for aa in [# ['spx500','bbusagtr'],
                 #             ['gscigold','bbusagtr'],
                            # ['spx500', 'gscigold', 'bbusagtr'],
@@ -753,7 +761,7 @@ def main(testmode=False, args=None):
                     aa_str = '-'.join(aa)
                     # key = 'eq'
                     # lr = 0.1
-                    # configs & variables
+                    # conf & variables
                     if args is not None:
                         name = '{}_{}'.format(args.prefix, key+aa_str)
                     else:
@@ -769,7 +777,7 @@ def main(testmode=False, args=None):
                         c.loss_wgt['logy'] = 0.1
                         # c.wgt_range = 0.11 * 2
                         c.wgt_range_min = [0.5, 0.1, 0., 0.01]
-                        c.wgt_range_max = [1., 1., 0.3, 0.3]
+                        c.wgt_range_max = [0.99, 0.99, 0.3, 0.3]
 
                         c.mdd_cp = 0.1
                         c.lr = 2e-2
@@ -798,8 +806,8 @@ def main(testmode=False, args=None):
                         # c.loss_wgt['wgt_guide'] = 0.0
                         # c.wgt_range = 0.99
                         c.lr = 5e-2
-                        c.wgt_range_min = [0., 0., 0., 0.]
-                        c.wgt_range_max = [1., 1., 1., 1.]
+                        c.wgt_range_min = [0.01] * 4
+                        c.wgt_range_max = [0.99] * 4
                         c.mdd_cp = 0.05
                         model_path = './out/test_20201222_01_eq/3900_0'
 
@@ -833,12 +841,12 @@ def main(testmode=False, args=None):
                         data_list = [MacroData('macro_data_20201222.txt'), a_data]
                         c.cash_idx = len(aa) - 1
                         c.base_weight = [1. / len(aa)] * len(aa)
-                        c.wgt_range_min = [0.] * len(aa)
-                        c.wgt_range_max = [1.] * len(aa)
+                        c.wgt_range_min = [0.01] * len(aa)
+                        c.wgt_range_max = [0.99] * len(aa)
                         ii = 3500
                     else:
                         c.cash_idx = 3
-                        # data processing
+                        # data_conf processing
                         if c.cash_idx == 2:
                             # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
                             data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
@@ -853,9 +861,9 @@ def main(testmode=False, args=None):
                         elif c.cash_idx == 7:
                             data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
                             ii = 3500
-                            c.base_weight = [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
-                            c.wgt_range_min = [0., 0., 0., 0., 0., 0., 0., 0.]
-                            c.wgt_range_max = [1., 1., 1., 1., 1., 1., 1., 1.]
+                            c.base_weight = [0.125,] * 8
+                            c.wgt_range_min = [0.01,] * 8
+                            c.wgt_range_max = [0.99, ] * 8
                             c.loss_wgt['logy'] = 0.1
 
                         else:
@@ -875,8 +883,8 @@ def main(testmode=False, args=None):
                     trainer = Trainer(c, dm)
                     # trainer.run_all()
                     trainer.run(ii)
-                    # train(c, model, optimizer, dm, 3489)
-                    # train(c, model, optimizer, sampler, t=1700)
+                    # train(c, models, optimizer, dm, 3489)
+                    # train(c, models, optimizer, sampler, t=1700)
 
                     # backtest(c, sampler, suffix)
 
@@ -948,8 +956,18 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--base_key', default='eq', type=str)
     parser.add_argument('--model_path', default=None, type=str)
+    parser.add_argument('--models', required=True, choices=['default', 'bond_first', 'bond_first_without_mc'])
 
     args = parser.parse_args()
+
+    if args.model == 'default':
+        from v20201222.model_v2 import MyModel
+    elif args.model == 'bond_first':
+        from v20201222.model_v2_bond import MyModel
+    else:
+        from v_latest.model_v2_bond import MyModel
+
+
     if not args.test:
         main(args=args)
     else:
@@ -964,6 +982,6 @@ if __name__ == '__main__':
     # income()
 
 # train
-# python -m v20201222.main_v2 --prefix=newmodel
+# python -m v20201222.main_v2 --models=default --prefix=newmodel
 # test
 # python -m v20201222.main_v2 --prefix=newmodel2 --test --base_key=eq model_path=./out/test_20201222_01_l/3900_0

@@ -58,7 +58,7 @@ class Configs:
         self.test_days = 2000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data
+        self.normalizing_window = 500  # norm windows for macro data_conf
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
         self.adv_train = True
         self.n_pretrain = 5
@@ -74,7 +74,7 @@ class Configs:
         self.eval_freq = 1  # 20
         self.save_freq = 20
         self.model_init_everytime = False
-        self.use_guide_wgt_as_prev_x = False  # model / forward_with_loss
+        self.use_guide_wgt_as_prev_x = False  # models / forward_with_loss
 
         self.hidden_dim = [72, 48, 32]
         self.alloc_hidden_dim = [32, 32]
@@ -162,7 +162,7 @@ class Trainer:
         c = self.c
         dm = self.dataset_manager
         self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
-        # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
+        # self.optimizer = torch.optim.Adam(self.models.parameters(), lr=c.lr, weight_decay=0.01)
         self.pre_optimizer = RAdam(self.model.parameters(), lr=c.pre_lr, weight_decay=0.01)
         self.post_optimizer = RAdam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
         self.optimizer = None
@@ -302,11 +302,11 @@ class Trainer:
             if it_ > n_batch_per_epoch:
                 break
 
-            # use adversarial training (data augmentation)
+            # use adversarial training (data_conf augmentation)
             if c.adv_train is True:
                 x = self.model.adversarial_noise(data_dict)
 
-            # run model and training
+            # run models and training
             out = self.model.forward_with_loss(data_dict, losses_wgt_fixed=self.losses_wgt_fixed)
             if not out:
                 continue
@@ -318,7 +318,7 @@ class Trainer:
             self.optimizer.zero_grad()
             losses.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), c.clip)
-            # print([(n, x.grad) for n, x in list(self.model.named_parameters())])
+            # print([(n, x.grad) for n, x in list(self.models.named_parameters())])
             self.optimizer.step()
 
         return losses_sum
@@ -332,7 +332,7 @@ class Trainer:
 
         losses_sum = 0
         losses_dict = dict()
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
 
         with torch.set_grad_enabled(False):
             for data_dict in dataloader:
@@ -366,7 +366,7 @@ class Trainer:
         dataloader = self.dataset_manager.get_data_loader(t, mode)
         losses_sum = 0
 
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
         with torch.set_grad_enabled(False):
             # store predicted wgts and t+1 returns of assets
             wgt = torch.zeros(len(dataloader.dataset), len(self.dataset_manager.labels_list)).to(tu.device)
@@ -433,7 +433,7 @@ class Trainer:
 
         x = np.arange(len(y_guide))
 
-        # save data
+        # save data_conf
         df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
         date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
@@ -618,10 +618,10 @@ def income():
                        eq=[0.5, 0.5])
 
     for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-        for key in ['l','m','h','eq',]:
+        for key in ['l','app_m.yaml','app_h.yaml','eq',]:
     # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
-    #     for key in ['m']:
-            # configs & variables
+    #     for key in ['app_m.yaml']:
+            # conf & variables
             name = 'income01_k20_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
@@ -639,7 +639,7 @@ def income():
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
 
-            # data processing
+            # data_conf processing
 
             data_list = [IncomeData(), MacroData()]
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
@@ -659,17 +659,17 @@ def main(testmode=False):
                                eq=[0.25, 0.25, 0.25, 0.25])
 
             # 검증
-            # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-            #                    m=[0.4, 0.15, 0.075, 0.375],
+            # base_weight = dict(app_h.yaml=[0.69, 0.2, 0.1, 0.01],
+            #                    app_m.yaml=[0.4, 0.15, 0.075, 0.375],
             #                    l=[0.25, 0.1, 0.05, 0.6],
             #                    eq=[0.25, 0.25, 0.25, 0.25])
 
             for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-                for key in ['l','m','h','eq',]:
+                for key in ['l','app_m.yaml','app_h.yaml','eq',]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
             # for seed, suffix in zip([100], ["_0"]):
             #     for key in ['eq']:
-                    # configs & variables
+                    # conf & variables
                     name = 'attn_app_1204_01_{}'.format(key)
                     # name = 'app_adv_1'
                     c = Configs(name)
@@ -687,7 +687,7 @@ def main(testmode=False):
                     with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                         f.write(str_)
 
-                    # data processing
+                    # data_conf processing
 
                     data_list = [AplusData(), MacroData()]
                     # data_list = [AssetData(), MacroData()]
@@ -697,8 +697,8 @@ def main(testmode=False):
                     trainer = Trainer(c, dm)
                     # trainer.run_all()
                     trainer.run(3900)
-                    # train(c, model, optimizer, dm, 3489)
-                    # train(c, model, optimizer, sampler, t=1700)
+                    # train(c, models, optimizer, dm, 3489)
+                    # train(c, models, optimizer, sampler, t=1700)
 
                     # backtest(c, sampler, suffix)
 

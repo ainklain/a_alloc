@@ -203,7 +203,7 @@ class LatentSDE(torchsde.SDEIto):
     def sample_p(self, ts, batch_size, eps=None, bm=None):
         eps = torch.randn(batch_size, 1).to(self.py0_mean) if eps is None else eps
         y0 = self.py0_mean + eps * self.py0_std
-        return sdeint_fn(self, y0, ts, bm=bm, method='srk', dt=args.dt, names={'drift': 'h'})
+        return sdeint_fn(self, y0, ts, bm=bm, method='srk', dt=args.dt, names={'drift': 'app_h.yaml'})
 
     def sample_q(self, ts, batch_size, eps=None, bm=None):
         eps = torch.randn(batch_size, 1).to(self.qy0_mean) if eps is None else eps
@@ -378,7 +378,7 @@ def main():
 
                 if args.save_ckpt:
                     torch.save(
-                        {'model': model.state_dict(),
+                        {'models': model.state_dict(),
                          'optimizer': optimizer.state_dict(),
                          'scheduler': scheduler.state_dict(),
                          'kl_scheduler': kl_scheduler},
@@ -389,7 +389,7 @@ def main():
         optimizer.zero_grad()
         zs, kl = model(ts=ts_ext, batch_size=args.batch_size)
         zs = zs.squeeze()
-        zs = zs[1:-1]  # Drop first and last which are only used to penalize out-of-data region and spread uncertainty.
+        zs = zs[1:-1]  # Drop first and last which are only used to penalize out-of-data_conf region and spread uncertainty.
 
         likelihood_constructor = {"laplace": distributions.Laplace, "normal": distributions.Normal}[args.likelihood]
         likelihood = likelihood_constructor(loc=zs, scale=args.scale)
@@ -424,7 +424,7 @@ if __name__ == '__main__':
     parser.add_argument('--train-dir', type=str, required=True)
     parser.add_argument('--save-ckpt', type=str2bool, default=False, const=True, nargs="?")
 
-    parser.add_argument('--data', type=str, default='segmented_cosine', choices=['segmented_cosine', 'irregular_sine', 'spx_index'])
+    parser.add_argument('--data_conf', type=str, default='segmented_cosine', choices=['segmented_cosine', 'irregular_sine', 'spx_index'])
     parser.add_argument('--kl-anneal-iters', type=int, default=100, help='Number of iterations for linear KL schedule.')
     parser.add_argument('--train-iters', type=int, default=5000, help='Number of iterations for training.')
     parser.add_argument('--pause-iters', type=int, default=50, help='Number of iterations before pausing.')

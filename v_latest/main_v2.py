@@ -69,7 +69,7 @@ class Trainer:
 
         dm = self.dataset_manager
         self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
-        # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=c.lr, weight_decay=0.01)
+        # self.optimizer = torch.optim.Adam(self.models.parameters(), lr=c.lr, weight_decay=0.01)
         self.pre_optimizer = RAdam(self.model.parameters(), lr=pre_lr, weight_decay=0.01)
         self.post_optimizer = RAdam(self.model.parameters(), lr=lr, weight_decay=0.01)
         self.optimizer = None
@@ -217,11 +217,11 @@ class Trainer:
             if it_ > n_batch_per_epoch:
                 break
 
-            # use adversarial training (data augmentation)
+            # use adversarial training (data_conf augmentation)
             if c.adv_train is True:
                 x = self.model.adversarial_noise(data_dict)
 
-            # run model and training
+            # run models and training
             out = self.model.forward_with_loss(data_dict, losses_wgt_fixed=self.losses_wgt_fixed)
             if not out:
                 continue
@@ -233,7 +233,7 @@ class Trainer:
             self.optimizer.zero_grad()
             losses.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), c.clip)
-            # print([(n, x.grad) for n, x in list(self.model.named_parameters())])
+            # print([(n, x.grad) for n, x in list(self.models.named_parameters())])
             self.optimizer.step()
 
         return losses_sum
@@ -247,7 +247,7 @@ class Trainer:
 
         losses_sum = 0
         losses_dict = dict()
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
 
         with torch.set_grad_enabled(False):
             for data_dict in dataloader:
@@ -281,7 +281,7 @@ class Trainer:
         dataloader = self.dataset_manager.get_data_loader(t, mode)
         losses_sum = 0
 
-        # run model for all data to evaluate model
+        # run models for all data_conf to evaluate models
         with torch.set_grad_enabled(False):
             # store predicted wgts and t+1 returns of assets
             wgt = torch.zeros(len(dataloader.dataset), len(self.dataset_manager.labels_list)).to(tu.device)
@@ -348,7 +348,7 @@ class Trainer:
 
         x = np.arange(len(y_guide))
 
-        # save data
+        # save data_conf
         df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
         date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (
@@ -545,10 +545,10 @@ def income():
                        eq=[0.5, 0.5])
 
     for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
-        for key in ['l', 'm', 'h', 'eq', ]:
+        for key in ['l', 'app_m.yaml', 'app_h.yaml', 'eq', ]:
             # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
-            #     for key in ['m']:
-            # configs & variables
+            #     for key in ['app_m.yaml']:
+            # conf & variables
             name = 'income01_k20_{}'.format(key)
             # name = 'app_adv_1'
             c = Configs(name)
@@ -566,7 +566,7 @@ def income():
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
 
-            # data processing
+            # data_conf processing
 
             data_list = [IncomeData(), MacroData()]
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
@@ -585,20 +585,20 @@ def main(testmode=False, args=None):
                        l=[0.25, 0.05, 0.05, 0.65],
                        eq=[0.25, 0.25, 0.25, 0.25])
     # # 실제
-    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-    #                    m=[0.45, 0.15, 0.075, 0.325],
+    # base_weight = dict(app_h.yaml=[0.69, 0.2, 0.1, 0.01],
+    #                    app_m.yaml=[0.45, 0.15, 0.075, 0.325],
     #                    l=[0.30, 0.1, 0.05, 0.55],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
     # 검증
-    # base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-    #                    m=[0.4, 0.15, 0.075, 0.375],
+    # base_weight = dict(app_h.yaml=[0.69, 0.2, 0.1, 0.01],
+    #                    app_m.yaml=[0.4, 0.15, 0.075, 0.375],
     #                    l=[0.25, 0.1, 0.05, 0.6],
     #                    eq=[0.25, 0.25, 0.25, 0.25])
 
     # for seed, suffix in zip([100, 1000, 123], ["_0", "_1", "_2"]):
     # for seed, suffix in zip([1000, 123], ["_0", "_1", "_2"]):
-    #     for key in ['m','l','h','eq',]:
+    #     for key in ['app_m.yaml','l','app_h.yaml','eq',]:
     # for seed, suffix in zip([100, 1000], ["_0", "_1"]):
     for seed, suffix in zip([123], ["_0"]):
         # for aa in [# ['spx500','bbusagtr'],
@@ -608,18 +608,18 @@ def main(testmode=False, args=None):
         # ['spx500', 'nasdaq100', 'russell2000', 'gscigold', 'bbusagtr'],
         # ['spx500', 'russell2000', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],
         # ['spx500', 'russell2000', 'csi300', 'kospi200', 'gscigold', 'bbusagtr', 'kiscompbondcall'],]:
-        for key in ['l', 'm', 'h', 'eq']:
+        for key in ['l', 'app_m.yaml', 'app_h.yaml', 'eq']:
             # m_data_raw = MacroData('macro_data_20201222.txt')
-            # for m in m_data_raw.columns:
+            # for app_m.yaml in m_data_raw.columns:
             #     m_data = MacroData('macro_data_20201222.txt')
-            # m = ['usyc3m2y index','gdp cury index','cl1 comdty','indu index']
-            # m_data.df = m_data.df.loc[:, m]
-            # m_data.columns = m
+            # app_m.yaml = ['usyc3m2y index','gdp cury index','cl1 comdty','indu index']
+            # m_data.df = m_data.df.loc[:, app_m.yaml]
+            # m_data.columns = app_m.yaml
             aa = ''
             aa_str = '-'.join(aa)
             # key = 'eq'
             lr = 0.1
-            # configs & variables
+            # conf & variables
             if args is not None:
                 name = '{}_{}'.format(args.prefix, key + str(lr) + aa_str)
             else:
@@ -642,8 +642,8 @@ def main(testmode=False, args=None):
                 model_path = './out/test_20201222_01_h/3900_0'
 
                 # l: ./out/test_20201222_01_l/3900_0
-                # m: test_20201222_01_m
-                # h: test_20201222_01_h
+                # app_m.yaml: test_20201222_01_m
+                # app_h.yaml: test_20201222_01_h
                 # eq: test_20201222_01_eq
             elif key == 'm':
                 c.loss_wgt['wgt_guide'] = 0.02
@@ -700,7 +700,7 @@ def main(testmode=False, args=None):
                 ii = 3500
             else:
                 c.cash_idx = 3
-                # data processing
+                # data_conf processing
                 if c.cash_idx == 2:
                     # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
                     data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
@@ -734,8 +734,8 @@ def main(testmode=False, args=None):
             trainer = Trainer(c, dm)
             # trainer.run_all()
             trainer.run(ii)
-            # train(c, model, optimizer, dm, 3489)
-            # train(c, model, optimizer, sampler, t=1700)
+            # train(c, models, optimizer, dm, 3489)
+            # train(c, models, optimizer, sampler, t=1700)
 
             # backtest(c, sampler, suffix)
 
@@ -814,8 +814,8 @@ if __name__ == '__main__':
         load_and_run(args.base_key, args.model_path)
 
         # l: ./out/test_20201222_01_l/3900_0
-        # m: test_20201222_01_m
-        # h: test_20201222_01_h
+        # app_m.yaml: test_20201222_01_m
+        # app_h.yaml: test_20201222_01_h
         # eq: test_20201222_01_eq
     # income()
 

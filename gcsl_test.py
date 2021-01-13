@@ -43,7 +43,7 @@ class Configs:
         self.retrain_days = 240
         self.test_days = 480  # test days
         self.init_train_len = 500
-        self.normalizing_window = 500  # norm windows for macro data
+        self.normalizing_window = 500  # norm windows for macro data_conf
         self.use_accum_data = True # [sampler] 데이터 누적할지 말지
         self.adaptive_flag = True
         self.n_pretrain = 20
@@ -120,8 +120,8 @@ def strategy_based_label(log_p, n, cash_idx=0, base_weight=None):
         m = np.nanmean(y[max(0, t-n+1):(t+1)], axis=0, keepdims=True)
         s = np.nanstd(y[max(0, t-n+1):(t+1)], axis=0, ddof=1, keepdims=True) + 1e-6
 
-        # F = 1 + np.tanh(np.sqrt(250) * (m / s))
-        # F = np.tanh(np.minimum(1, m / s ** 2)) + 1
+        # F = 1 + np.tanh(np.sqrt(250) * (app_m.yaml / s))
+        # F = np.tanh(np.minimum(1, app_m.yaml / s ** 2)) + 1
 
         if base_weight is None:
             # kelly based label (equal)
@@ -153,7 +153,7 @@ def strategy_based_label(log_p, n, cash_idx=0, base_weight=None):
         #     # min_base_weight[cash_filter] = 1.
         #
         #     # kelly based label (equal)
-        #     F = np.tanh(m / s ** 2) + 1
+        #     F = np.tanh(app_m.yaml / s ** 2) + 1
         #     nan_filter = np.isnan(F)
         #     n_asset = log_p.shape[1] - np.sum(nan_filter)
         #     F[nan_filter] = 0.
@@ -204,14 +204,14 @@ def get_data(configs):
 
     delete_nan = 500
 
-    # get data
-    macro_data = pd.read_csv('./data/macro_data.txt', index_col=0, sep='\t')
+    # get data_conf
+    macro_data = pd.read_csv('./data_conf/macro_data.txt', index_col=0, sep='\t')
     macro_data['copper_gold_r'] = macro_data['HG1 Comdty'] / macro_data['GC1 Comdty']
 
     if c.datatype == 'app':
-        idx_data = pd.read_csv('./data/app_data.txt', index_col=0, sep='\t')
+        idx_data = pd.read_csv('./data_conf/app_data.txt', index_col=0, sep='\t')
     else:
-        idx_data = pd.read_csv('./data/index_data.txt', index_col=0, sep='\t')
+        idx_data = pd.read_csv('./data_conf/index_data.txt', index_col=0, sep='\t')
 
     print(idx_data.columns)
     merged = pd.merge(macro_data, idx_data, left_index=True, right_index=True)
@@ -259,7 +259,7 @@ def get_data(configs):
     add_info['macro_list'] = macro_data.columns.to_numpy()
     add_info['calc_days'] = calc_days
 
-    # truncate unlabeled data
+    # truncate unlabeled data_conf
     label_len = np.min([len(labels_dict['logy']), len(labels_dict['wgt']), len(labels_dict['logy_for_calc'])])
     for key in labels_dict.keys():
         labels_dict[key] = labels_dict[key][:label_len]
@@ -298,11 +298,11 @@ def main():
     with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
         f.write(str_)
 
-    # data processing
+    # data_conf processing
     features_dict, labels_dict, add_info = get_data(configs=c)
     sampler = Sampler(features_dict, labels_dict, add_info, configs=c)
 
-    model = MyModel(sampler.n_features + 4, sampler.n_labels, cost_rate=c.cost_rate) # 4: nav, mdd, g, h
+    model = MyModel(sampler.n_features + 4, sampler.n_labels, cost_rate=c.cost_rate) # 4: nav, mdd, g, app_h.yaml
     optimizer = torch.optim.Adam(model.parameters(), lr=c.lr, weight_decay=0.01)
 
     memory = Memory(1e5)
@@ -310,7 +310,7 @@ def main():
     t = 3001
     outpath_t = os.path.join(c.outpath, str(t))
     os.makedirs(outpath_t, exist_ok=True)
-    # initial data collecting
+    # initial data_conf collecting
     for _ in range(1000):
         goal = 0.03 + np.random.rand() * 0.07   # 0.03~0.1
         idx = np.random.choice(np.arange(500, t))
@@ -347,13 +347,13 @@ def main():
         n_batch_cycle = memory.reset_epoch(batch_size)
         for _ in range(n_batch_cycle):
             data = memory.sample_batch(batch_size, epoch=True)
-            # pred_a = model.policy(data['s0'], data['sh'], data['h'])
-            policy_dist, mu, scale = model.policy(data['s0'], data['sh'], data['h'])
+            # pred_a = models.policy(data_conf['s0'], data_conf['sh'], data_conf['app_h.yaml'])
+            policy_dist, mu, scale = model.policy(data['s0'], data['sh'], data['app_h.yaml'])
             pred_a = normalize_action(policy_dist.rsample())
             label_a = data['a']
             entropy = policy_dist.entropy()
             # loss = entropy.sum()
-            # loss = (nn.MSELoss(reduction='none')(pred_a, label_a) * data['sign']).sum() - entropy.sum()
+            # loss = (nn.MSELoss(reduction='none')(pred_a, label_a) * data_conf['sign']).sum() - entropy.sum()
             loss = (nn.KLDivLoss(reduction='none')(torch.log(pred_a), label_a) * data['sign']).sum()
             optimizer.zero_grad()
             loss.backward()
@@ -486,7 +486,7 @@ class Sampler:
                 memory_per_traj.append({'s0': traj[m][0],
                                         'a':  traj[m][1],
                                         'sh': pf_r[k:(k+1)],
-                                        'h': torch.tensor([[(k-m) / 100]], dtype=torch.float32),
+                                        'app_h.yaml': torch.tensor([[(k-m) / 100]], dtype=torch.float32),
                                         'sign': torch.tensor([[sign_]], dtype=torch.float32)})
 
         return memory_per_traj, [traj, pf_r, pf_mdd]
@@ -631,7 +631,7 @@ class MyModel(Module):
     @profile
     def policy(self, s, g, h):
         # features, labels=  train_features, train_labels
-        # s = s0; self = model; n_samples=10
+        # s = s0; self = models; n_samples=10
         if type(g) in [int, float]:
             g = torch.tensor([[g]], dtype=torch.float32).to(s.device)
 
