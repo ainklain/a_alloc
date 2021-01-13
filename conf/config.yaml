@@ -42,11 +42,11 @@ model:
     - 128
     - 64
     - 64
-    -
+
   alloc_hidden_dim:
     - 128
     - 64
-    -
+
   dropout_r: 0.3
 
   ## attention

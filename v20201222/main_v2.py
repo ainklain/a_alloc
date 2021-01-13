@@ -19,7 +19,8 @@ import GPUtil
 
 from v20201222.logger_v2 import Logger
 # from v_latest.model_v2_bond import MyModel, load_model, save_model
-from v_latest.model_v2_bond import load_model, save_model
+# from v_latest.model_v2_bond import load_model, save_model
+from v20201222.model_v2 import load_model, save_model
 from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
 from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
@@ -65,7 +66,7 @@ class Configs:
         self.test_days = 5000  # test days
         self.init_train_len = 500
         self.train_data_len = 2000
-        self.normalizing_window = 500  # norm windows for macro data_conf
+        self.normalizing_window = 500  # norm windows for macro data
         self.use_accum_data = True  # [sampler] 데이터 누적할지 말지
         self.adv_train = False #True
         self.n_pretrain = 5
@@ -362,7 +363,7 @@ class Trainer:
             if it_ > n_batch_per_epoch:
                 break
 
-            # use adversarial training (data_conf augmentation)
+            # use adversarial training (data augmentation)
             if c.adv_train is True:
                 x = self.model.adversarial_noise(data_dict)
 
@@ -392,7 +393,7 @@ class Trainer:
 
         losses_sum = 0
         losses_dict = dict()
-        # run models for all data_conf to evaluate models
+        # run models for all data to evaluate models
 
         with torch.set_grad_enabled(False):
             for data_dict in dataloader:
@@ -426,7 +427,7 @@ class Trainer:
         dataloader = self.dataset_manager.get_data_loader(t, mode)
         losses_sum = 0
 
-        # run models for all data_conf to evaluate models
+        # run models for all data to evaluate models
         with torch.set_grad_enabled(False):
             # store predicted wgts and t+1 returns of assets
             wgt = torch.zeros(len(dataloader.dataset), len(self.dataset_manager.labels_list)).to(tu.device)
@@ -493,7 +494,7 @@ class Trainer:
 
         x = np.arange(len(y_guide))
 
-        # save data_conf
+        # save data
         df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
 
         date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
@@ -709,7 +710,7 @@ def income():
             with open(os.path.join(c.outpath, 'c.txt'), 'w') as f:
                 f.write(str_)
 
-            # data_conf processing
+            # data processing
 
             data_list = [IncomeData(), MacroData()]
             dm = DatasetManager(data_list, c.test_days, c.batch_size)
@@ -846,7 +847,7 @@ def main(testmode=False, args=None):
                         ii = 3500
                     else:
                         c.cash_idx = 3
-                        # data_conf processing
+                        # data processing
                         if c.cash_idx == 2:
                             # data_list = [m_data, AssetData('asset_data_us_20201222.txt')]
                             data_list = [MacroData(), AssetData('asset_data_us_20201222.txt')]
@@ -956,7 +957,7 @@ if __name__ == '__main__':
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--base_key', default='eq', type=str)
     parser.add_argument('--model_path', default=None, type=str)
-    parser.add_argument('--models', required=True, choices=['default', 'bond_first', 'bond_first_without_mc'])
+    parser.add_argument('--model', required=True, choices=['default', 'bond_first', 'bond_first_without_mc'])
 
     args = parser.parse_args()
 
@@ -982,6 +983,6 @@ if __name__ == '__main__':
     # income()
 
 # train
-# python -m v20201222.main_v2 --models=default --prefix=newmodel
+# python -m v20201222.main_v2 --model=default --prefix=newmodel
 # test
 # python -m v20201222.main_v2 --prefix=newmodel2 --test --base_key=eq model_path=./out/test_20201222_01_l/3900_0

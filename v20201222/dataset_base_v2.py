@@ -11,7 +11,7 @@ from v20201222 import transforms_v2
 
 
 class AbstractData(metaclass=ABCMeta):
-    base_dir = './data_conf/'
+    base_dir = './data/'
 
     @classmethod
     def set_base_dir(cls, dir):
