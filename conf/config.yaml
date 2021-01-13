@@ -1,6 +1,6 @@
 hydra:
   run:
-    dir: out/${model.name}/${experiment.name}/
+    dir: ../out/${model.name}/${experiment.name}/
 
 
 ####################################################################
