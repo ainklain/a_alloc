@@ -26,15 +26,16 @@ from v20201222.optimizer_v2 import RAdam
 import torch_utils as tu
 
 
-# # #### profiler start ####
-import builtins
-try:
-    builtins.profile
-except AttributeError:
-    # No line profiler, provide a pass-through version
-    def profile(func): return func
-    builtins.profile = profile
-# # #### profiler end ####
+tu.use_profile()
+# # # #### profiler start ####
+# import builtins
+# try:
+#     builtins.profile
+# except AttributeError:
+#     # No line profiler, provide a pass-through version
+#     def profile(func): return func
+#     builtins.profile = profile
+# # # #### profiler end ####
 
 
 class Configs:
@@ -717,7 +718,6 @@ def income():
 
             trainer = Trainer(c, dm)
             trainer.run_all()
-
 
 
 testmode = False

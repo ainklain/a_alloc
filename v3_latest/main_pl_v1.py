@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from omegaconf import DictConfig
 import hydra
 from hydra.utils import to_absolute_path
+import sys
 import numpy as np
 import torch
 import pandas as pd
@@ -11,6 +12,7 @@ import random
 import re
 import os
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from conf.conf_helper import evaluate_cfg
 from v20201222.logger_v2 import Logger
@@ -449,9 +451,7 @@ class Trainer:
             self.run(t)
 
 
-
-# @profile
-@hydra.main(config_path="../conf", config_name="config")
+# @hydra.main(config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
     # initialize cfg
     evaluate_cfg(cfg)
@@ -466,33 +466,82 @@ def main(cfg: DictConfig):
 
     print(cfg.keys())
     dm = DatasetManager(data_list, cfg.data.test_days, cfg.data.batch_size)
-    print(len(dm.labels_list), len(dm.features_list))
 
     ################
     # model
     ################
 
-    model_cls = model_list['model_v2']
-    # self.model = MyModel(len(dm.features_list), len(dm.labels_list), configs=c)
-    model = model_cls(len(dm.features_list), model_cfg=cfg.model)
+    model_cls = model_list[cfg.model.name]
+    model = model_cls(len(dm.features_list), model_cfg=cfg.model, exp_cfg=cfg.experiment, dm=dm)
 
     ################
     # trainer
     ################
+    trainer_cfg = cfg.trainer
     # stage 1
-    trainer = pl.Trainer()
-    trainer.tune(model)
+    model.set_stage(1)
 
-    early_stop_callback = EarlyStopping(
-        monitor='val_loss',
+    early_stop_callback1 = EarlyStopping(
+        monitor=cfg.trainer.stage1.monitor,
         min_delta=0.00,
-        patience=3,
+        patience=cfg.trainer.stage1.patience,
         verbose=False,
         mode='max'
     )
-    trainer.fit(model, train_dataloader=None, val_dataloaders=None, callback=[early_stop_callback])
 
+    trainer = pl.Trainer(
+        gpus=trainer_cfg.gpus,
+        check_val_every_n_epoch=trainer_cfg.check_val_every_n_epoch,
+        gradient_clip_val=trainer_cfg.gradient_clip_val,
+        auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
+        callbacks=[early_stop_callback1]
+    )
+    # trainer.tune(model)
+
+    trainer.fit(model,
+                # train_dataloader=train_dataloader,
+                # val_dataloaders=val_dataloader,
+                )
+
+    # stage 2
+    model.set_stage(2)
+    early_stop_callback2 = EarlyStopping(
+        monitor=cfg.trainer.stage2.monitor,
+        min_delta=0.00,
+        patience=cfg.trainer.stage2.monitor,
+        verbose=False,
+        mode='max'
+    )
+    trainer.fit(model, train_dataloader=None, val_dataloaders=None, callback=[early_stop_callback2])
+
+
+def main_wrapper():
+    if hasattr(sys, 'ps1'):
+        """
+        REPL Mode
+        """
+
+        from hydra.core.global_hydra import GlobalHydra
+        from hydra.experimental import compose, initialize
+        from omegaconf import OmegaConf
+
+        GlobalHydra.instance().clear()
+        initialize(config_path="./conf", job_name="test_app")
+        cfg = compose(config_name="config")
+        print(OmegaConf.to_yaml(cfg))
+        main(cfg)
+
+    else:
+        """
+        CLI Mode
+        """
+
+        @hydra.main(config_path="../conf", config_name="config")
+        def func(cfg: DictConfig):
+            return main(cfg)
+
+        func()
 
 
 if __name__ == '__main__':
-    main()
+    main_wrapper()

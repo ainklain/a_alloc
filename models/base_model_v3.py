@@ -4,10 +4,11 @@ import copy
 from collections import OrderedDict
 import os
 import numpy as np
-from typing import List
+from typing import List, Union
 import torch
 from torch import nn, distributions
 from torch.nn import init, Module, functional as F
+from torch.utils.data import DataLoader
 from torch.distributions import Normal
 import pytorch_lightning as pl
 from torch.distributions import Categorical
@@ -221,11 +222,12 @@ class MyModel(pl.LightningModule):
         train_sample = dm.sample('train')
         test_sample = dm.sample('test')
     """
-    def __init__(self, n_features, model_cfg, exp_cfg):
+    def __init__(self, n_features, model_cfg, exp_cfg, dm):
         super(MyModel, self).__init__()
 
         self.model_cfg = model_cfg
         self.exp_cfg = exp_cfg
+        self.dm = dm
 
         # attentive models
         self.conv_emb = layer.ConvEmbeddingLayer(n_features, model_cfg.d_model)
@@ -239,6 +241,16 @@ class MyModel(pl.LightningModule):
         self.strategies_allocator = MLPWithBN(**model_cfg.allocator)
 
         self.optim_state_dict = self.state_dict()
+        self.current_stage = None
+
+    def set_stage(self, stage=1):
+        assert stage in [1, 2]
+        if stage == 1:
+            self.lr = self.exp_cfg.pre_lr
+            self.loss_wgt = self.model_cfg.pre_loss_wgt
+        else:
+            self.lr = self.exp_cfg.lr
+            self.loss_wgt = self.model_cfg.loss_wgt
 
     def forward(self, x):
         ########
@@ -246,6 +258,9 @@ class MyModel(pl.LightningModule):
         wgt_guide = self.exp_cfg.base_weight
         use_guide_wgt_as_prev_x = self.exp_cfg.use_guide_wgt_as_prev_x
         ########
+        if self.current_stage is None:
+            print('do set_stage(stage={1|2}) before run')
+            return None
 
         features, features_prev = x
         with torch.set_grad_enabled(False):
@@ -314,19 +329,23 @@ class MyModel(pl.LightningModule):
         for key in losses_dict.keys():
             losses += losses_dict[key]
 
-        return x, losses, pred_mu, pred_sigma, losses_dict
+        logs = {"loss": losses, "losses_dict": losses_dict}
+        return {"loss": losses, "log": logs}
 
-    def on_epoch_start(self):
-        if self.trainer.global_step:
-            self.trainer.accelerator_backend.setup_optimizers(self)
+    # def validation_step(self, *args, **kwargs):
+    #     pass
+
+    def train_dataloader(self) -> DataLoader:
+        return self.dm.get_data_loader(self.exp_cfg.ii, 'train')
+
+    def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+        return self.dm.get_data_loader(self.exp_cfg.ii, 'eval')
+
+    def on_train_start(self) -> None:
+        self.trainer.accelerator_backend.setup_optimizers(self)
 
     def configure_optimizers(self):
-        if condition:
-            lr = self.exp_cfg.pre_lr
-        else:
-            lr = self.exp_cfg.lr
-
-        return RAdam(self.parameters(), lr=lr)
+        return RAdam(self.parameters(), lr=self.lr)
 
     def on_validation_epoch_end(self) -> None:
         pass
