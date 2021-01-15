@@ -1,7 +1,10 @@
+
+####################################################################
+# hydra configs
+####################################################################
 hydra:
   run:
-    dir: ../out/${model.name}/${experiment.name}/
-
+    dir: out/${model.name}/${experiment.name}/${now:%Y%m%d_%H%M%S}
 
 ####################################################################
 # set configs
@@ -17,8 +20,8 @@ defaults:
 ####################################################################
 data:
   update: 20201230
-  outpath: ./out/${model.name}/${experiment.name}/
 
+  batch_size: 512
   sampling_freq: 20
   k_days: 20
   label_days: 20
@@ -31,30 +34,43 @@ data:
   normalizing_window: 500  # norm windows for macro data_conf
   use_accum_data: True  # [sampler] 데이터 누적할지 말지
 
+  random_guide_weight: 0.1
+  random_flip: 0.1  # flip sign
+  random_label: 0.1  # random sample from dist.
+
 ####################################################################
 # model configs (default)
 ####################################################################
 model:
-  name: model_v2
-  mc_samples: 1000
+  name: default
 
-  hidden_dim:
-    - 128
-    - 64
-    - 64
-
-  alloc_hidden_dim:
-    - 128
-    - 64
-
+  d_model: 128
   dropout_r: 0.3
 
+  mcdropout:
+    in_dim: ${model.d_model}
+    out_dim: ${data.num_assets}
+    hidden_dim:
+      - 128
+      - 128
+    dropout_r: ${model.dropout_r}
+    mc_samples: 1000
+
+  allocator:
+    # num_assets: {wgt, mean, std} + d_model: {x_emb, attn output}
+    in_dim: "(eval) ${data.num_assets} * 3 + ${model.d_model} * 2"
+    out_dim: "(eval) ${data.num_assets} * 2"
+    hidden_dim:
+      - 128
+      - 64
+
   ## attention
-  d_model: 128
-  n_heads: 8
-  d_k: 16  # d_model / n_heads
-  d_v: 16  # d_model / n_heads
-  d_ff: 128
+  attention:
+    d_model: ${model.d_model}
+    n_heads: 8
+    d_k: "(eval) ${model.attention.d_model} // ${model.attention.n_heads}"
+    d_v: "(eval) ${model.attention.d_model} // ${model.attention.n_heads}"
+    d_ff: 128
 
   loss_list:
     - 'y_pf'
@@ -62,15 +78,13 @@ model:
     - 'logy'
     - 'wgt_guide'
     - 'cost'
-    - 'entropy'
 
-  adaptive_loss_wgt:
+  pre_loss_wgt:
     'y_pf': 0.0
     'mdd_pf': 0.0
     'logy': 0.0
     'wgt_guide': 0.5
     'cost': 10.0
-    'entropy': 0.0
 
   loss_wgt:
     'y_pf': 1
@@ -78,43 +92,47 @@ model:
     'logy': 1.0
     'wgt_guide': 0.02
     'cost': 1.0
-    'entropy': 0.001
 
 ####################################################################
 # trainer configs (default)
 ####################################################################
 trainer:
+  stage1:
+    parience: 10
+
+  stage2:
+
+
+  gpus: 1
+  check_val_every_n_epoch: 1  # 20
+  gradient_clip_val: 1.
+
+  auto_scale_batch_size: None  # None | power | binsearch
+
   adaptive_flag: True
   adaptive_count: 10
-  adaptive_lrx: 5  # learning rate * 배수
   es_max_count: 200
   loss_threshold: None  # -1
-  cost_rate: 0.003
   plot_freq: 10
-  eval_freq: 1  # 20
   save_freq: 20
   model_init_everytime: False
-  use_guide_wgt_as_prev_x: False  # models / forward_with_loss
 
-  random_guide_weight: 0.1
-  random_flip: 0.1  # flip sign
-  random_label: 0.1  # random sample from dist.
-
-  clip: 1.
+  num_epochs: 1000
 
 ####################################################################
 # experiment configs (default)
 ####################################################################
 experiment:
+  ii: 3900
   seed: 1000
   pre_lr: 0.005
   lr: 0.05
-  batch_size: 512
-  num_epochs: 1000
   base_i0: 2000
+  cost_rate: 0.003
 
-  adv_train: False #True
   n_pretrain: 5
-  max_entropy: True
+  use_guide_wgt_as_prev_x: False  # models / forward_with_loss
 
-
+  log_level: DEBUG
+#  outpath: ./out/${model.name}/${experiment.name}/{now:%Y%m%s_%H%M%S}
+  outpath: .    # working directory가 알아서 바뀜... hydra.utils.to_absolute_path or utils.get_original_cwd()

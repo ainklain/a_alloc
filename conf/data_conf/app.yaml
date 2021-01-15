@@ -6,8 +6,8 @@ data:
   cash_idx: 3
   num_assets: 4
 
-  data_path:
-    asset: ./data/app_data_${data.update}.txt
-    macro: ./data/macro_data_${data.update}.txt
+  path:
+    asset: app_data_${data.update}.txt
+    macro: macro_data_${data.update}.txt
 
 

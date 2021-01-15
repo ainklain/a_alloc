@@ -9,8 +9,8 @@ from v20201222 import transforms_v2
 
 
 class DummyMacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -21,18 +21,18 @@ class DummyMacroData(DataFromFiles):
 
 
 class AplusDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
 
 class MacroDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
 
 class AplusLogyData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -44,8 +44,8 @@ class AplusLogyData(DataFromFiles):
 
 
 class MacroLogyData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -56,8 +56,8 @@ class MacroLogyData(DataFromFiles):
 
 
 class AplusData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
         self.label_columns_dict = OrderedDict()
         for feature in ['logy', 'mu', 'sigma']:
             self.label_columns_dict[feature] = ['{}_{}'.format(col, feature) for col in self.columns]
@@ -81,18 +81,18 @@ class AplusData(DataFromFiles):
             reduce='concat')
 
 class AssetData(AplusData):
-    def __init__(self, file_nm='asset_data_20201201.txt'):
-        super(AssetData, self).__init__(file_nm)
+    def __init__(self, file_nm='asset_data_20201201.txt', **kwargs):
+        super(AssetData, self).__init__(file_nm, **kwargs)
 
 
 class IncomeData(AplusData):
-    def __init__(self, file_nm='income_data_20200820.txt'):
-        super(IncomeData, self).__init__(file_nm)
+    def __init__(self, file_nm='income_data_20200820.txt', **kwargs):
+        super(IncomeData, self).__init__(file_nm, **kwargs)
 
 
 class MacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
         if 'hg1 comdty' in self.df.columns and 'gc1 comdty' in self.df.columns:
             self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
         if 'spx index' in self.df.columns:
