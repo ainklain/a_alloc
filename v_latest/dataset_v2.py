@@ -1,16 +1,20 @@
-
+from typing import List
 import numpy as np
 from collections import OrderedDict
-from v20201222.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
-from v20201222 import transforms_v2
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from v_latest.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
+from v_latest import transforms_v2
+import torch_utils as tu
 
 
 # Data Description
 
 
 class DummyMacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -21,18 +25,18 @@ class DummyMacroData(DataFromFiles):
 
 
 class AplusDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
 
 class MacroDataWithoutTransform(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
 
 class AplusLogyData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -44,8 +48,8 @@ class AplusLogyData(DataFromFiles):
 
 
 class MacroLogyData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
 
     def _transform(self):
         transforms_apply = transforms_v2.Transforms([
@@ -56,8 +60,8 @@ class MacroLogyData(DataFromFiles):
 
 
 class AplusData(DataFromFiles):
-    def __init__(self, file_nm='app_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='app_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
         self.label_columns_dict = OrderedDict()
         for feature in ['logy', 'mu', 'sigma']:
             self.label_columns_dict[feature] = ['{}_{}'.format(col, feature) for col in self.columns]
@@ -81,18 +85,18 @@ class AplusData(DataFromFiles):
             reduce='concat')
 
 class AssetData(AplusData):
-    def __init__(self, file_nm='asset_data_20201201.txt'):
-        super(AssetData, self).__init__(file_nm)
+    def __init__(self, file_nm='asset_data_20201201.txt', **kwargs):
+        super(AssetData, self).__init__(file_nm, **kwargs)
 
 
 class IncomeData(AplusData):
-    def __init__(self, file_nm='income_data_20200820.txt'):
-        super(IncomeData, self).__init__(file_nm)
+    def __init__(self, file_nm='income_data_20200820.txt', **kwargs):
+        super(IncomeData, self).__init__(file_nm, **kwargs)
 
 
 class MacroData(DataFromFiles):
-    def __init__(self, file_nm='macro_data_20201222.txt'):
-        super().__init__(file_nm)
+    def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
+        super().__init__(file_nm, **kwargs)
         if 'hg1 comdty' in self.df.columns and 'gc1 comdty' in self.df.columns:
             self.df['copper_gold_r'] = self.df['hg1 comdty'] / self.df['gc1 comdty']
         if 'spx index' in self.df.columns:
@@ -116,7 +120,7 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
     """
     MultiTaskDatasetForMultiTimesteps(AplusData())
     [asssigned from Base]
-    - data_conf      : arr, idx, columns, label_columns_dict
+    - data      : arr, idx, columns, label_columns_dict
     - parameter : sampling_days, k_days
     """
     def __init__(self, addible_data, *args, window=250, pos_embedding=True, **kwargs):
@@ -155,8 +159,8 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
         out['labels_prev'] = dict([(key, labels_prev_base[-1, self.label_columns_idx(key)])
                                    for key in self.label_columns_dict.keys()])
 
-        if i >= self.default_range[1] or i < self.default_range[0]: # very recent data_conf
-            out['labels'] = out['labels_prev'] # dummy. not used. 
+        if i >= self.default_range[1] or i < self.default_range[0]: # very recent data
+            out['labels'] = out['labels_prev'] # dummy. not used.
             # out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
             #                       for key in self.label_columns_dict.keys()])
         else:
@@ -194,7 +198,9 @@ class DatasetManager(DatasetManagerBase):
 
         # default range: 전체 데이터 양끝단 못 쓰는 idx 제거 (ie. multistep: [window:-k_days])
         # => 수정: 마지막 k_days는 가능케끔 하고 label=None처리
+        # => 수정: begin_i의 경우 base_i와 k_days로 나눈 나머지가 같게끔 하여 test_insample과 통계량 맞추기
         default_begin_i, default_end_i = self.dataset.default_range
+        default_begin_i = (default_begin_i // self.dataset.k_days + 1) * self.dataset.k_days
 
         if mode == 'train':
             begin_i = 0
@@ -224,7 +230,7 @@ class DatasetManager(DatasetManagerBase):
         else:
             raise NotImplementedError
 
-        params = dict(begin_i=max(default_begin_i, begin_i),
+        params = dict(begin_i=max(default_begin_i, begin_i) + base_i % self.dataset.k_days,
                       end_i=end_i,
                       batch_size=batch_size,
                       sampler_type=sampler_type)
@@ -234,7 +240,7 @@ class DatasetManager(DatasetManagerBase):
     def get_begin_end_info(self, base_i, mode):
         assert mode in ['test', 'test_insample']
         params_base = self.mode_params(base_i, mode)
-        r_ = base_i % self.dataset.k_days
+
         # time series dataset index info
         if mode == 'test':
             idx_list = [params_base['begin_i'], params_base['end_i']-1]
@@ -246,3 +252,30 @@ class DatasetManager(DatasetManagerBase):
         idx_ = [i - idx_list[0] for i in idx_list]  # re-indexing for sub-dataset
 
         return dict(date_=date_, idx_=idx_)
+
+    def plot(self, outputs: dict, base_i: int, mode: str, cost_rate: float):
+        # asset names
+        asset_names = [label_name.split('_')[0] for label_name in self.labels_list]
+
+        # date
+        params_base = self.mode_params(base_i, mode)
+        date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'] + 1)]
+
+        # portfolio return (next_y, pred, guide per asset + performance before and after cost)
+        y = dict()
+        for key in outputs.keys():
+            y[key] = pd.DataFrame(outputs[key], columns=['{}_{}'.format(name, key) for name in asset_names])
+            if key == 'next_y':
+                continue
+            else:
+                y_dict, _ = tu.calc_y(wgt0=outputs[key], y1=outputs['next_y'], cost_r=cost_rate)
+
+            for cost_time in ['before_cost', 'after_cost']:
+                y['{}_{}'.format(key, cost_time)] = pd.DataFrame(y_dict[cost_time], columns=[cost_time])
+
+        df = pd.DataFrame()
+        for key in y.keys():
+            print(key)
+            df = pd.concat([df, y[key]], axis=1)
+
+        df.set_index(date_)

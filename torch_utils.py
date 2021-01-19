@@ -95,3 +95,15 @@ def use_profile():
             return func
 
         builtins.profile = profile
+
+
+def calc_y(wgt0, y1, cost_r=0.):
+    # wgt0: 0 ~ T-1 ,  y1 : 1 ~ T  => 0 ~ T (0번째 값은 0)
+    y = dict()
+    wgt1 = wgt0 * (1 + y1)
+    # turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]), axis=1), 0)
+    turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1] / wgt1[:-1].sum(axis=1, keepdims=True)), axis=1), 0)
+    y['before_cost'] = np.insert(np.sum(wgt1, axis=1) - 1, 0, 0)
+    y['after_cost'] = np.insert(np.sum(wgt1, axis=1) - 1 - turnover * cost_r, 0, 0)
+
+    return y, turnover

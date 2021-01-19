@@ -12,28 +12,17 @@ import random
 import re
 import os
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import Callback, GPUStatsMonitor
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from conf.conf_helper import evaluate_cfg
-from v20201222.logger_v2 import Logger
-from v20201222.model_v2 import load_model, save_model
-from v20201222.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
+from v_latest.logger_v2 import Logger
+from v_latest.dataset_v2 import DatasetManager, AplusData, MacroData, IncomeData, AssetData, DummyMacroData
 from models import model_list
 import torch_utils as tu
 
 tu.use_profile()
-
-
-def calc_y(wgt0, y1, cost_r=0.):
-    # wgt0: 0 ~ T-1 ,  y1 : 1 ~ T  => 0 ~ T (0번째 값은 0)
-    y = dict()
-    wgt1 = wgt0 * (1 + y1)
-    # turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]), axis=1), 0)
-    turnover = np.append(np.sum(np.abs(wgt0[1:] - wgt1[:-1]/wgt1[:-1].sum(axis=1, keepdims=True)), axis=1), 0)
-    y['before_cost'] = np.insert(np.sum(wgt1, axis=1) - 1, 0, 0)
-    y['after_cost'] = np.insert(np.sum(wgt1, axis=1) - 1 - turnover * cost_r, 0, 0)
-
-    return y, turnover
 
 
 class Trainer:
@@ -472,12 +461,18 @@ def main(cfg: DictConfig):
     ################
 
     model_cls = model_list[cfg.model.name]
-    model = model_cls(len(dm.features_list), model_cfg=cfg.model, exp_cfg=cfg.experiment, dm=dm)
+    model = model_cls(model_cfg=cfg.model, exp_cfg=cfg.experiment, dm=dm)
+
+    ################
+    # logger
+    ################
+    logger = TensorBoardLogger("tb_logs", name="my_model")
 
     ################
     # trainer
     ################
     trainer_cfg = cfg.trainer
+
     # stage 1
     model.set_stage(1)
 
@@ -485,6 +480,33 @@ def main(cfg: DictConfig):
         monitor=cfg.trainer.stage1.monitor,
         min_delta=0.00,
         patience=cfg.trainer.stage1.patience,
+        verbose=False,
+        mode='max',
+    )
+
+    trainer = pl.Trainer(
+        gpus=trainer_cfg.gpus,
+        check_val_every_n_epoch=trainer_cfg.check_val_every_n_epoch,
+        gradient_clip_val=trainer_cfg.gradient_clip_val,
+        auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
+        callbacks=[early_stop_callback1],
+        logger=logger,
+    )
+    # trainer.tune(model)
+
+    trainer.fit(model,
+                # train_dataloader=train_dataloader,
+                # val_dataloaders=val_dataloader,
+                )
+
+
+    # stage 2
+    model.set_stage(2)
+
+    early_stop_callback2 = EarlyStopping(
+        monitor=cfg.trainer.stage2.monitor,
+        min_delta=0.00,
+        patience=cfg.trainer.stage2.patience,
         verbose=False,
         mode='max'
     )
@@ -494,25 +516,11 @@ def main(cfg: DictConfig):
         check_val_every_n_epoch=trainer_cfg.check_val_every_n_epoch,
         gradient_clip_val=trainer_cfg.gradient_clip_val,
         auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
-        callbacks=[early_stop_callback1]
+        callbacks=[early_stop_callback2],
+        logger=logger,
     )
-    # trainer.tune(model)
 
-    trainer.fit(model,
-                # train_dataloader=train_dataloader,
-                # val_dataloaders=val_dataloader,
-                )
-
-    # stage 2
-    model.set_stage(2)
-    early_stop_callback2 = EarlyStopping(
-        monitor=cfg.trainer.stage2.monitor,
-        min_delta=0.00,
-        patience=cfg.trainer.stage2.monitor,
-        verbose=False,
-        mode='max'
-    )
-    trainer.fit(model, train_dataloader=None, val_dataloaders=None, callback=[early_stop_callback2])
+    trainer.fit(model)
 
 
 def main_wrapper():

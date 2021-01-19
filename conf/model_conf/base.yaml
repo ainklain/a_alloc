@@ -1,2 +1,5 @@
 model:
   name: default
+
+  allocator:
+    out_dim: "(eval) (${data.num_assets} - 1) * 2"

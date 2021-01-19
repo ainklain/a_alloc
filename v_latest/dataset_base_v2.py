@@ -11,7 +11,7 @@ from v20201222 import transforms_v2
 
 
 class AbstractData(metaclass=ABCMeta):
-    base_dir = './data_conf/'
+    base_dir = './data/'
 
     @classmethod
     def set_base_dir(cls, dir):
@@ -90,8 +90,10 @@ class AddibleData(AbstractData):
 
 
 class DataFromFiles(AddibleData):
-    def __init__(self, file_nm='macro_data_20200615.txt'):
+    def __init__(self, file_nm='macro_data_20200615.txt', base_dir=None):
         super().__init__()
+        if base_dir is not None:
+            self.base_dir = base_dir
         self.set_data_from_name(file_nm)
 
     def get_file_dir(self, file_nm):

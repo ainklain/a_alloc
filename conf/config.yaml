@@ -6,6 +6,7 @@ hydra:
   run:
     dir: out/${model.name}/${experiment.name}/${now:%Y%m%d_%H%M%S}
 
+
 ####################################################################
 # set configs
 ####################################################################
@@ -134,6 +135,10 @@ experiment:
 
   n_pretrain: 5
   use_guide_wgt_as_prev_x: False  # models / forward_with_loss
+
+  # data related
+  cash_idx: ${data.cash_idx}
+
 
   log_level: DEBUG
 #  outpath: ./out/${model.name}/${experiment.name}/{now:%Y%m%s_%H%M%S}

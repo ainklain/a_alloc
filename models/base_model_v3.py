@@ -4,7 +4,7 @@ import copy
 from collections import OrderedDict
 import os
 import numpy as np
-from typing import List, Union
+from typing import List, Union, Any
 import torch
 from torch import nn, distributions
 from torch.nn import init, Module, functional as F
@@ -135,7 +135,7 @@ class MCDropout(Module):
         x = torch.randn(512, 30).cuda()
         """
         x = x.unsqueeze(0).repeat(self.mc_samples, 1, 1)
-        pred = self.forward(x, sample=True, dropout=self.dropout_r)
+        pred = self.infer(x, sample=True)
 
         pred_mu = torch.mean(pred, dim=0)
         with torch.set_grad_enabled(False):
@@ -222,7 +222,7 @@ class MyModel(pl.LightningModule):
         train_sample = dm.sample('train')
         test_sample = dm.sample('test')
     """
-    def __init__(self, n_features, model_cfg, exp_cfg, dm):
+    def __init__(self, model_cfg, exp_cfg, dm):
         super(MyModel, self).__init__()
 
         self.model_cfg = model_cfg
@@ -230,11 +230,10 @@ class MyModel(pl.LightningModule):
         self.dm = dm
 
         # attentive models
-        self.conv_emb = layer.ConvEmbeddingLayer(n_features, model_cfg.d_model)
+        self.conv_emb = layer.ConvEmbeddingLayer(len(dm.features_list), model_cfg.d_model)
         self.attentive_model = Attention(**model_cfg.attention)
 
         # mc dropout models
-        # self.expected_return_estimator = ExpectedReturnEstimator(n_features, n_assets, c.hidden_dim)
         self.expected_return_estimator = MCDropout(**model_cfg.mcdropout)
 
         # allocator (non-cash only)
@@ -246,16 +245,18 @@ class MyModel(pl.LightningModule):
     def set_stage(self, stage=1):
         assert stage in [1, 2]
         if stage == 1:
+            self.current_stage = 1
             self.lr = self.exp_cfg.pre_lr
             self.loss_wgt = self.model_cfg.pre_loss_wgt
         else:
+            self.current_stage = 1
             self.lr = self.exp_cfg.lr
             self.loss_wgt = self.model_cfg.loss_wgt
 
     def forward(self, x):
         ########
         # defined parameter in configs
-        wgt_guide = self.exp_cfg.base_weight
+        base_weight = self.exp_cfg.base_weight
         use_guide_wgt_as_prev_x = self.exp_cfg.use_guide_wgt_as_prev_x
         ########
         if self.current_stage is None:
@@ -263,6 +264,7 @@ class MyModel(pl.LightningModule):
             return None
 
         features, features_prev = x
+        wgt_guide = torch.tensor(base_weight).repeat([len(features), 1]).type_as(features)
         with torch.set_grad_enabled(False):
             if features_prev is not None:
                 wgt_prev, _, _, _ = self.infer(features_prev, wgt_guide)
@@ -283,10 +285,11 @@ class MyModel(pl.LightningModule):
             wgt_ = wgt_mu
 
         wgt_ = self.noncash_to_all(wgt_, wgt_guide)
+
         return dist, wgt_, wgt_prev, pred_mu, pred_sigma, wgt_guide
 
     @profile
-    def training_step(self, batch, batch_idx):
+    def shared_step(self, batch):
         ########
         # defined parameter in configs
         loss_list = self.model_cfg.loss_list
@@ -296,23 +299,21 @@ class MyModel(pl.LightningModule):
         ########
 
         features, labels, features_prev, labels_prev = self.data_dict_to_list(batch)
-        dist, x, prev_x, pred_mu, pred_sigma, guide_wgt = self([features, features_prev])
+        dist, x, prev_x, pred_mu, pred_sigma, wgt_guide = self([features, features_prev])
 
         next_logy = labels['logy'].detach().clone()
         next_y = torch.exp(next_logy) - 1.
 
         losses_dict = dict()
-        # losses_dict['y_pf'] = -(x * labels['logy']).sum()
-
         for i_loss, key in enumerate(loss_list):
             if key == 'y_pf':
-                losses_dict[key] = -((x - guide_wgt) * next_y).sum()
+                losses_dict[key] = -((x - wgt_guide) * next_y).sum()
             elif key == 'mdd_pf':
                 losses_dict[key] = 10 * F.elu(-(x * next_y).sum(dim=1) - mdd_cp, 1e-6).sum()
             elif key == 'logy':
                 losses_dict[key] = nn.MSELoss(reduction='sum')(pred_mu, labels['logy'])
             elif key == 'wgt_guide':
-                losses_dict[key] = nn.KLDivLoss(reduction='sum')(torch.log(x), guide_wgt).sum()
+                losses_dict[key] = nn.KLDivLoss(reduction='sum')(torch.log(x), wgt_guide).sum()
             elif key == 'cost':
                 if labels_prev is not None:
                     next_y_prev = torch.exp(labels_prev['logy']) - 1.
@@ -320,37 +321,71 @@ class MyModel(pl.LightningModule):
                     wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
                     losses_dict[key] = (torch.abs(x - wgt_prev) * cost_rate).sum().exp()
                 else:
-                    losses_dict[key] = (torch.abs(x - guide_wgt) * cost_rate).sum().exp()
+                    losses_dict[key] = (torch.abs(x - wgt_guide) * cost_rate).sum().exp()
 
-            # losses_dict['entropy'] = HLoss()(x)
             losses_dict[key] = losses_dict[key] * loss_wgt[key]
 
         losses = torch.tensor(0, dtype=torch.float32).to(labels['logy'].device)
         for key in losses_dict.keys():
             losses += losses_dict[key]
 
-        logs = {"loss": losses, "losses_dict": losses_dict}
-        return {"loss": losses, "log": logs}
+        additional = {'pred': x, 'next_y': next_y, 'guide': wgt_guide}
+        return losses, losses_dict, additional
 
-    # def validation_step(self, *args, **kwargs):
-    #     pass
+    def training_step(self, batch, batch_idx):
+        losses, losses_dict, _ = self.shared_step(batch)
+        self.log_dict({"loss": losses, "losses_dict": losses_dict})
+        return {"loss": losses}
+
+    def validation_step(self, batch, batch_idx, dataloader_idx):
+        losses, losses_dict, additional = self.shared_step(batch)
+        return {"loss": losses, "losses_dict": losses_dict, "additional": additional}
 
     def train_dataloader(self) -> DataLoader:
         return self.dm.get_data_loader(self.exp_cfg.ii, 'train')
 
     def val_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
-        return self.dm.get_data_loader(self.exp_cfg.ii, 'eval')
+        val_dataloader = self.dm.get_data_loader(self.exp_cfg.ii, 'eval')
+        test_insample_dataloader = self.dm.get_data_loader(self.exp_cfg.ii, 'test_insample')
+        test_dataloader = self.dm.get_data_loader(self.exp_cfg.ii, 'test')
+        return [val_dataloader, test_insample_dataloader, test_dataloader]
+
+    def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+        return self.dm.get_data_loader(self.exp_cfg.ii, 'test')
 
     def on_train_start(self) -> None:
+        print('stage {} train start.'.format(self.current_stage))
         self.trainer.accelerator_backend.setup_optimizers(self)
 
     def configure_optimizers(self):
         return RAdam(self.parameters(), lr=self.lr)
 
-    def on_validation_epoch_end(self) -> None:
-        pass
+    def validation_epoch_end(self, multiloader_outputs: List[Any]) -> None:
+        val_losses = 0
+        test_losses = 0
 
-    def infer(self, x, wgt, mc_samples):
+        for dataloader_i, outputs in enumerate(multiloader_outputs):
+            if dataloader_i == 0:
+                for i, batch in enumerate(outputs):
+                    val_losses += batch['loss']
+                    print("[valid_step_end]: (val) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
+
+            elif dataloader_i == 1:
+                self.plot(outputs, 'test_insample')
+                # for i, batch in enumerate(outputs):
+                #     print("[valid_step_end]: (test_insample) {} {} {}".format(i, batch['additional']['wgt'].shape, batch['additional']['next_y'].shape))
+
+            elif dataloader_i == 2:
+                self.plot(outputs, 'test')
+                # for i, batch in enumerate(outputs):
+                #     test_losses += batch['loss']
+                #     print("[valid_step_end]: (test) {} {} {}".format(i, batch['additional']['wgt'].shape, batch['additional']['next_y'].shape))
+
+        # self.log_dict({"val_loss": val_losses, 'test_loss': test_losses})
+        self.log_dict({"val_loss": val_losses})
+        return {'val_loss': val_losses}
+
+    def infer(self, x, wgt):
         """
         wgt = features['wgt']
         """
@@ -361,7 +396,7 @@ class MyModel(pl.LightningModule):
         x_attn = self.attentive_model(x_emb)
 
         # expected return estimation
-        _, pred_mu, pred_sigma = self.expected_return_estimator(x_emb[:, -1, :], mc_samples=mc_samples)
+        _, pred_mu, pred_sigma = self.expected_return_estimator(x_emb[:, -1, :])
 
         # allocation
         x = torch.cat([pred_mu, pred_sigma, wgt, x_emb[:, -1, :], x_attn], dim=-1)
@@ -441,6 +476,189 @@ class MyModel(pl.LightningModule):
         features.grad.zero_()
 
         return features_perturbed
+
+    def plot(self, outputs: List[dict], mode):
+        ########
+        # defined parameter in configs
+        ii = self.exp_cfg.ii
+        cost_rate = self.exp_cfg.cost_rate
+        ########
+
+        plot_data = dict()
+        for key in ['next_y', 'pred', 'guide']:
+            plot_data[key] = tu.np_ify(torch.cat([batch['additional'][key] for batch in outputs], dim=0))
+
+        self.dm.plot(plot_data, ii, cost_rate)
+
+
+
+        y_next = data_for_plot['next_y'][selected_sampling, :]
+        wgt_result_calc = wgt_result[selected_sampling, :]
+        wgt_guide_calc = wgt_guide[selected_sampling, :]
+
+
+        y_guide = np.insert(np.sum((1 + y_next) * wgt_guide_calc, axis=1), 0, 1.)
+        y_port = np.insert(np.sum((1 + y_next) * wgt_result_calc, axis=1), 0, 1.)
+        y_port_const = np.insert(np.sum((1 + y_next) * wgt_result_const_calc, axis=1), 0, 1.)
+        y_eq = np.insert(np.mean(1 + y_next, axis=1), 0, 1.)
+
+        y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
+        y_port_const_with_c, turnover_port_const = calc_y(wgt_result_const_calc, y_next, cost_rate)
+        y_guide_with_c, turnover_guide = calc_y(wgt_guide_calc, y_next, cost_rate)
+
+        x = np.arange(len(y_guide))
+
+        # save data
+        df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
+
+        date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
+        date_selected = date_[selected_sampling]
+
+        columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_wgt_const' for idx_nm in idx_list] + [
+            idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac',
+                                                         'port_const_ac', 'guide_ac']
+        df = pd.DataFrame(data=np.concatenate([wgt_result_calc, wgt_result_const_calc, y_next,
+                                               y_port_with_c['before_cost'][1:, np.newaxis],
+                                               y_port_const_with_c['before_cost'][1:, np.newaxis],
+                                               y_guide_with_c['before_cost'][1:, np.newaxis],
+                                               y_port_with_c['after_cost'][1:, np.newaxis],
+                                               y_port_const_with_c['after_cost'][1:, np.newaxis],
+                                               y_guide_with_c['after_cost'][1:, np.newaxis],
+                                               ], axis=-1),
+                          index=date_selected
+                          , columns=columns)
+
+        df_all = df.loc[:, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
+        df_test = df.loc[
+            date_test_selected, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
+        df_stats = pd.concat({'mu_all': df_all.mean() * 12,
+                              'sig_all': df_all.std(ddof=1) * np.sqrt(12),
+                              'sr_all': df_all.mean() / df_all.std(ddof=1) * np.sqrt(12),
+                              'mu_test': df_test.mean() * 12,
+                              'sig_test': df_test.std(ddof=1) * np.sqrt(12),
+                              'sr_test': df_test.mean() / df_test.std(ddof=1) * np.sqrt(12)},
+                             axis=1)
+
+        print(ep, suffix, '\n', df_stats)
+        df.to_csv(os.path.join(outpath, '{}_all_data_{}.csv'.format(ep, suffix)))
+        df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
+        df_wgt.to_csv(os.path.join(outpath, '{}_wgtdaily_{}.csv'.format(ep, suffix)))
+
+        # ################ together
+
+        outpath_plot = os.path.join(outpath, 'plot')
+        os.makedirs(outpath_plot, exist_ok=True)
+
+        fig = plt.figure()
+        ax1 = fig.add_subplot(211)
+        # ax = plt.gca()
+        l_port, = ax1.plot(x, y_port.cumprod())
+        l_port_const, = ax1.plot(x, y_port_const.cumprod())
+        l_eq, = ax1.plot(x, y_eq.cumprod())
+        l_guide, = ax1.plot(x, y_guide.cumprod())
+        ax1.legend(handles=(l_port, l_port_const, l_eq, l_guide), labels=('port', 'port_const', 'eq', 'guide'))
+
+        ax2 = fig.add_subplot(212)
+        l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
+        l_portconst_guide, = ax2.plot(x, (1 + y_port_const - y_guide).cumprod() - 1.)
+        # l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
+        l_port_guide_ac, = ax2.plot(x, (1 + y_port_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
+        l_portconst_guide_ac, = ax2.plot(x, (
+                    1 + y_port_const_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
+        ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_guide_ac, l_portconst_guide_ac),
+                   labels=('port-guide', 'portconst-guide', 'port-guide(ac)', 'portconst-guide(ac)'))
+        # ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
+        #            labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
+
+        if len(data_for_plot['idx_']) == 4:
+            ax1.axvline(data_for_plot['idx_'][1] // k_days)
+            ax1.axvline(data_for_plot['idx_'][2] // k_days)
+            ax2.axvline(data_for_plot['idx_'][1] // k_days)
+            ax2.axvline(data_for_plot['idx_'][2] // k_days)
+
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(data_for_plot['idx_'][2] // k_days, ax2.get_ylim()[1], data_for_plot['date_'][2]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(x[-1], ax2.get_ylim()[1], data_for_plot['date_'][3]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+        else:
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax1.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][1]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+
+        fig.savefig(os.path.join(outpath_plot, '{}_test_y_{}.png'.format(ep, suffix)))
+        plt.close(fig)
+
+        # #############################
+
+        viridis = cm.get_cmap('viridis', n_asset)
+
+        x = np.arange(len(wgt_result_calc))
+        wgt_result_cum = wgt_result_calc.cumsum(axis=1)
+        wgt_guide_cum = wgt_guide_calc.cumsum(axis=1)
+        fig = plt.figure()
+        fig.suptitle('Weight Diff')
+        # ax1 = fig.add_subplot(311)
+        ax1 = fig.add_subplot(211)
+        ax1.set_title('base')
+        for i in range(n_asset):
+            if i == 0:
+                ax1.fill_between(x, 0, wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+            else:
+                ax1.fill_between(x, wgt_result_cum[:, i - 1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+
+        # ax2 = fig.add_subplot(312)
+        ax2 = fig.add_subplot(212)
+        ax2.set_title('result')
+        for i in range(n_asset):
+            if i == 0:
+                ax2.fill_between(x, 0, wgt_guide_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
+            else:
+                ax2.fill_between(x, wgt_guide_cum[:, i - 1], wgt_guide_cum[:, i], facecolor=viridis.colors[i],
+                                 alpha=.7)
+
+        if len(data_for_plot['idx_']) == 4:
+            ax1.axvline(data_for_plot['idx_'][1] // k_days)
+            ax1.axvline(data_for_plot['idx_'][2] // k_days)
+
+            ax2.axvline(data_for_plot['idx_'][1] // k_days)
+            ax2.axvline(data_for_plot['idx_'][2] // k_days)
+
+            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(data_for_plot['idx_'][2] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][2]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+            ax2.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][3]
+                     , horizontalalignment='center'
+                     , verticalalignment='center'
+                     , bbox=dict(facecolor='white', alpha=0.7))
+
+        fig.savefig(os.path.join(outpath_plot, '{}_test_wgt_{}.png'.format(ep, suffix)))
+        plt.close(fig)
 
     def save_to_optim(self):
         self.optim_state_dict = copy.deepcopy(self.state_dict())
