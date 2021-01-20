@@ -2,7 +2,6 @@ from typing import List
 import numpy as np
 from collections import OrderedDict
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from v_latest.dataset_base_v2 import DataFromFiles, DatasetManagerBase, DatasetForTimeSeriesBase
 from v_latest import transforms_v2
@@ -10,7 +9,6 @@ import torch_utils as tu
 
 
 # Data Description
-
 
 class DummyMacroData(DataFromFiles):
     def __init__(self, file_nm='macro_data_20201222.txt', **kwargs):
@@ -44,7 +42,6 @@ class AplusLogyData(DataFromFiles):
         ])
 
         self.df = transforms_apply.sequential(self.df)
-
 
 
 class MacroLogyData(DataFromFiles):
@@ -83,6 +80,7 @@ class AplusData(DataFromFiles):
         self.df, self.columns = transforms_apply.apply(
             self.df, self.columns,
             reduce='concat')
+
 
 class AssetData(AplusData):
     def __init__(self, file_nm='asset_data_20201201.txt', **kwargs):
@@ -202,14 +200,15 @@ class DatasetManager(DatasetManagerBase):
         default_begin_i, default_end_i = self.dataset.default_range
         default_begin_i = (default_begin_i // self.dataset.k_days + 1) * self.dataset.k_days
 
+        eval_rate = 0.60
         if mode == 'train':
             begin_i = 0
-            end_i = int(base_i * 0.60) - self.dataset.k_days
+            end_i = int(base_i * eval_rate) - self.dataset.k_days
             batch_size = self.batch_size
             sampler_type = 'random_sampler'
 
         elif mode == 'eval':
-            begin_i = int(base_i * 0.60) - self.dataset.k_days
+            begin_i = int(base_i * eval_rate)
             end_i = int(base_i * 0.99) - self.dataset.k_days
             batch_size = self.batch_size
             sampler_type = 'random_without_replacement'
@@ -233,7 +232,8 @@ class DatasetManager(DatasetManagerBase):
         params = dict(begin_i=max(default_begin_i, begin_i) + base_i % self.dataset.k_days,
                       end_i=end_i,
                       batch_size=batch_size,
-                      sampler_type=sampler_type)
+                      sampler_type=sampler_type,
+                      eval_rate=eval_rate)
 
         return params
 
@@ -253,29 +253,65 @@ class DatasetManager(DatasetManagerBase):
 
         return dict(date_=date_, idx_=idx_)
 
-    def plot(self, outputs: dict, base_i: int, mode: str, cost_rate: float):
+    def calculate_result(self, outputs: dict, base_i: int, mode: str, cost_rate: float):
+        k_days = self.dataset.k_days
+        ######################
         # asset names
+        ######################
         asset_names = [label_name.split('_')[0] for label_name in self.labels_list]
 
+        ######################
         # date
+        ######################
         params_base = self.mode_params(base_i, mode)
-        date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'] + 1)]
 
-        # portfolio return (next_y, pred, guide per asset + performance before and after cost)
-        y = dict()
+        date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'] + 1)]
+        date_selected = date_[::k_days]
+
+        ######################
+        # portfolio result (next_y, pred, guide per asset + performance before and after cost)
+        ######################
+        result = dict()
         for key in outputs.keys():
-            y[key] = pd.DataFrame(outputs[key], columns=['{}_{}'.format(name, key) for name in asset_names])
+            result[key] = pd.DataFrame(outputs[key], columns=['{}_{}'.format(name, key) for name in asset_names])
             if key == 'next_y':
                 continue
             else:
                 y_dict, _ = tu.calc_y(wgt0=outputs[key], y1=outputs['next_y'], cost_r=cost_rate)
 
             for cost_time in ['before_cost', 'after_cost']:
-                y['{}_{}'.format(key, cost_time)] = pd.DataFrame(y_dict[cost_time], columns=[cost_time])
+                column_name = '{}_{}'.format(key, cost_time)
+                result['{}'.format(column_name)] = pd.DataFrame({
+                    'y_{}'.format(column_name): y_dict[cost_time],
+                    # 'p_{}'.format(column_name): (1. + y_dict[cost_time]).cumprod()
+                })
 
-        df = pd.DataFrame()
-        for key in y.keys():
-            print(key)
-            df = pd.concat([df, y[key]], axis=1)
+        ######################
+        # result to dataframe
+        ######################
+        # daily predicted weight per asset
+        df_pred = pd.DataFrame(outputs['pred'], index=date_, columns=asset_names)
 
-        df.set_index(date_)
+        # 20 days portfolio result
+        df_result = pd.DataFrame()
+        for key in result.keys():
+            df_result = pd.concat([df_result, result[key][::k_days]], axis=1)
+
+        # 누적 수익률 추가
+        for cost_time in ['before_cost', 'after_cost']:
+            df_result['y_diff_{}'.format(cost_time)] = df_result['y_pred_{}'.format(cost_time)] - df_result['y_guide_{}'.format(cost_time)]
+            df_result['p_diff_{}'.format(cost_time)] = (1. + df_result['y_diff_{}'.format(cost_time)]).cumprod()
+            for type in ['pred', 'guide']:
+                df_result['p_{}_{}'.format(type, cost_time)] = (1. + df_result['y_{}_{}'.format(type, cost_time)]).cumprod()
+
+        df_result = df_result.set_index(date_selected)
+
+        # helper value for plot
+        base_d = self.dataset.idx[base_i]
+        plot_helper = {
+            'base_d': base_d,
+            'base_i': list(df_result.index).index(base_d)}
+        plot_helper['eval_i'] = int(plot_helper['base_i'] * params_base['eval_rate'])
+        plot_helper['eval_d'] = list(df_result.index)[plot_helper['eval_i']]
+
+        return df_result, df_pred, plot_helper

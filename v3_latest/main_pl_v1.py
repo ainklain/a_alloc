@@ -83,7 +83,6 @@ class Trainer:
                         date_dict = self.dataset_manager.get_begin_end_info(t, mode)
                         data_for_plot.update(date_dict)
 
-
                         self.plot(ep, data_for_plot, outpath_t, suffix=suffix + mode)
 
                 losses_dict['train'][ep] = losses_train
@@ -491,6 +490,7 @@ def main(cfg: DictConfig):
         auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
         callbacks=[early_stop_callback1],
         logger=logger,
+        # reload_dataloaders_every_epoch=True,
     )
     # trainer.tune(model)
 
@@ -518,6 +518,7 @@ def main(cfg: DictConfig):
         auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
         callbacks=[early_stop_callback2],
         logger=logger,
+        # reload_dataloaders_every_epoch=True,
     )
 
     trainer.fit(model)

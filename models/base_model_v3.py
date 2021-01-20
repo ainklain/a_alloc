@@ -13,6 +13,7 @@ from torch.distributions import Normal
 import pytorch_lightning as pl
 from torch.distributions import Categorical
 
+import matplotlib.pyplot as plt
 
 import layer
 import torch_utils as tu
@@ -288,6 +289,7 @@ class MyModel(pl.LightningModule):
 
         return dist, wgt_, wgt_prev, pred_mu, pred_sigma, wgt_guide
 
+
     @profile
     def shared_step(self, batch):
         ########
@@ -334,12 +336,12 @@ class MyModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         losses, losses_dict, _ = self.shared_step(batch)
-        self.log_dict({"loss": losses, "losses_dict": losses_dict})
+        # self.log_dict({"loss": losses, "losses_dict": losses_dict})
         return {"loss": losses}
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
         losses, losses_dict, additional = self.shared_step(batch)
-        return {"loss": losses, "losses_dict": losses_dict, "additional": additional}
+        return {"loss": losses, "losses_dict": losses_dict, "additional": additional, "dataloader_idx": dataloader_idx}
 
     def train_dataloader(self) -> DataLoader:
         return self.dm.get_data_loader(self.exp_cfg.ii, 'train')
@@ -362,6 +364,7 @@ class MyModel(pl.LightningModule):
 
     def validation_epoch_end(self, multiloader_outputs: List[Any]) -> None:
         val_losses = 0
+        test_insample_losses = 0
         test_losses = 0
 
         for dataloader_i, outputs in enumerate(multiloader_outputs):
@@ -371,18 +374,24 @@ class MyModel(pl.LightningModule):
                     print("[valid_step_end]: (val) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
 
             elif dataloader_i == 1:
-                self.plot(outputs, 'test_insample')
-                # for i, batch in enumerate(outputs):
-                #     print("[valid_step_end]: (test_insample) {} {} {}".format(i, batch['additional']['wgt'].shape, batch['additional']['next_y'].shape))
+                if not self.trainer.running_sanity_check:
+                    self.plot(outputs, 'test_insample')
+
+                for i, batch in enumerate(outputs):
+                    test_insample_losses += batch['loss']
+                    print("[valid_step_end]: (test_insample) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
 
             elif dataloader_i == 2:
-                self.plot(outputs, 'test')
-                # for i, batch in enumerate(outputs):
-                #     test_losses += batch['loss']
-                #     print("[valid_step_end]: (test) {} {} {}".format(i, batch['additional']['wgt'].shape, batch['additional']['next_y'].shape))
+                if not self.trainer.running_sanity_check:
+                    self.plot(outputs, 'test')
 
-        # self.log_dict({"val_loss": val_losses, 'test_loss': test_losses})
-        self.log_dict({"val_loss": val_losses})
+                for i, batch in enumerate(outputs):
+                    test_losses += batch['loss']
+                    print("[valid_step_end]: (test) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
+
+        print("loss: {} {} {}".format(val_losses, test_insample_losses, test_losses))
+        # self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
+        # self.log_dict({"val_loss": val_losses})
         return {'val_loss': val_losses}
 
     def infer(self, x, wgt):
@@ -484,180 +493,56 @@ class MyModel(pl.LightningModule):
         cost_rate = self.exp_cfg.cost_rate
         ########
 
+        ######################
+        # calculate portfolio result through datamanager (dataframe)
+        ######################
         plot_data = dict()
         for key in ['next_y', 'pred', 'guide']:
             plot_data[key] = tu.np_ify(torch.cat([batch['additional'][key] for batch in outputs], dim=0))
 
-        self.dm.plot(plot_data, ii, cost_rate)
+        df_result, df_pred, plot_helper = self.dm.calculate_result(plot_data, ii, mode, cost_rate)
 
+        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '{}_all_data_{}.csv'.format(self.global_step, mode)))
+        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '{}_wgtdaily_{}.csv'.format(self.global_step, mode)))
+        # df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
 
+        ######################
+        # plot
+        ######################
 
-        y_next = data_for_plot['next_y'][selected_sampling, :]
-        wgt_result_calc = wgt_result[selected_sampling, :]
-        wgt_guide_calc = wgt_guide[selected_sampling, :]
-
-
-        y_guide = np.insert(np.sum((1 + y_next) * wgt_guide_calc, axis=1), 0, 1.)
-        y_port = np.insert(np.sum((1 + y_next) * wgt_result_calc, axis=1), 0, 1.)
-        y_port_const = np.insert(np.sum((1 + y_next) * wgt_result_const_calc, axis=1), 0, 1.)
-        y_eq = np.insert(np.mean(1 + y_next, axis=1), 0, 1.)
-
-        y_port_with_c, turnover_port = calc_y(wgt_result_calc, y_next, cost_rate)
-        y_port_const_with_c, turnover_port_const = calc_y(wgt_result_const_calc, y_next, cost_rate)
-        y_guide_with_c, turnover_guide = calc_y(wgt_guide_calc, y_next, cost_rate)
-
-        x = np.arange(len(y_guide))
-
-        # save data
-        df_wgt = pd.DataFrame(data=wgt_result, index=date_, columns=[idx_nm + '_wgt' for idx_nm in idx_list])
-
-        date_test_selected = ((date_[selected_sampling] >= data_for_plot['date_'][-2]) & (date_[selected_sampling] < data_for_plot['date_'][-1]))
-        date_selected = date_[selected_sampling]
-
-        columns = [idx_nm + '_wgt' for idx_nm in idx_list] + [idx_nm + '_wgt_const' for idx_nm in idx_list] + [
-            idx_nm + '_ynext' for idx_nm in idx_list] + ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac',
-                                                         'port_const_ac', 'guide_ac']
-        df = pd.DataFrame(data=np.concatenate([wgt_result_calc, wgt_result_const_calc, y_next,
-                                               y_port_with_c['before_cost'][1:, np.newaxis],
-                                               y_port_const_with_c['before_cost'][1:, np.newaxis],
-                                               y_guide_with_c['before_cost'][1:, np.newaxis],
-                                               y_port_with_c['after_cost'][1:, np.newaxis],
-                                               y_port_const_with_c['after_cost'][1:, np.newaxis],
-                                               y_guide_with_c['after_cost'][1:, np.newaxis],
-                                               ], axis=-1),
-                          index=date_selected
-                          , columns=columns)
-
-        df_all = df.loc[:, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
-        df_test = df.loc[
-            date_test_selected, ['port_bc', 'port_const_bc', 'guide_bc', 'port_ac', 'port_const_ac', 'guide_ac']]
-        df_stats = pd.concat({'mu_all': df_all.mean() * 12,
-                              'sig_all': df_all.std(ddof=1) * np.sqrt(12),
-                              'sr_all': df_all.mean() / df_all.std(ddof=1) * np.sqrt(12),
-                              'mu_test': df_test.mean() * 12,
-                              'sig_test': df_test.std(ddof=1) * np.sqrt(12),
-                              'sr_test': df_test.mean() / df_test.std(ddof=1) * np.sqrt(12)},
-                             axis=1)
-
-        print(ep, suffix, '\n', df_stats)
-        df.to_csv(os.path.join(outpath, '{}_all_data_{}.csv'.format(ep, suffix)))
-        df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
-        df_wgt.to_csv(os.path.join(outpath, '{}_wgtdaily_{}.csv'.format(ep, suffix)))
-
-        # ################ together
-
-        outpath_plot = os.path.join(outpath, 'plot')
+        outpath_plot = os.path.join(self.exp_cfg.outpath, 'plot')
         os.makedirs(outpath_plot, exist_ok=True)
 
+        ######################
+        # plot1 (performance)
+
         fig = plt.figure()
         ax1 = fig.add_subplot(211)
-        # ax = plt.gca()
-        l_port, = ax1.plot(x, y_port.cumprod())
-        l_port_const, = ax1.plot(x, y_port_const.cumprod())
-        l_eq, = ax1.plot(x, y_eq.cumprod())
-        l_guide, = ax1.plot(x, y_guide.cumprod())
-        ax1.legend(handles=(l_port, l_port_const, l_eq, l_guide), labels=('port', 'port_const', 'eq', 'guide'))
-
         ax2 = fig.add_subplot(212)
-        l_port_guide, = ax2.plot(x, (1 + y_port - y_guide).cumprod() - 1.)
-        l_portconst_guide, = ax2.plot(x, (1 + y_port_const - y_guide).cumprod() - 1.)
-        # l_port_eq, = ax2.plot(x,(1 + y_port - y_eq).cumprod() - 1.)
-        l_port_guide_ac, = ax2.plot(x, (1 + y_port_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
-        l_portconst_guide_ac, = ax2.plot(x, (
-                    1 + y_port_const_with_c['after_cost'] - y_guide_with_c['after_cost']).cumprod() - 1.)
-        ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_guide_ac, l_portconst_guide_ac),
-                   labels=('port-guide', 'portconst-guide', 'port-guide(ac)', 'portconst-guide(ac)'))
-        # ax2.legend(handles=(l_port_guide, l_portconst_guide, l_port_eq, l_port_guide_ac, l_portconst_guide_ac),
-        #            labels=('port-guide', 'portconst-guide', 'port-eq','port-guide(ac)', 'portconst-guide(ac)'))
+        # ax = plt.gca()
 
-        if len(data_for_plot['idx_']) == 4:
-            ax1.axvline(data_for_plot['idx_'][1] // k_days)
-            ax1.axvline(data_for_plot['idx_'][2] // k_days)
-            ax2.axvline(data_for_plot['idx_'][1] // k_days)
-            ax2.axvline(data_for_plot['idx_'][2] // k_days)
+        # cumulative price
+        prc = df_result.loc[:, ['p_pred_before_cost', 'p_guide_before_cost', 'p_pred_after_cost', 'p_guide_after_cost']]
+        prc.plot(ax=ax1, logy=True)
 
-            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(data_for_plot['idx_'][2] // k_days, ax2.get_ylim()[1], data_for_plot['date_'][2]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(x[-1], ax2.get_ylim()[1], data_for_plot['date_'][3]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-        else:
-            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax1.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][1]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
+        # diff
+        diff = df_result.loc[:, ['p_diff_before_cost', 'p_diff_after_cost']]
+        diff.plot(ax=ax2, logy=True)
 
-        fig.savefig(os.path.join(outpath_plot, '{}_test_y_{}.png'.format(ep, suffix)))
+        if mode == 'test_insample':
+            ax1.set_title("eval:{}/base:{}".format(plot_helper['eval_d'], plot_helper['base_d']))
+            ax2.axvline(x=plot_helper['eval_i'])
+            ax2.axvline(x=plot_helper['base_i'])
+
+        fig.savefig(os.path.join(outpath_plot, '{}_test_y_{}.png'.format(self.global_step, mode)))
         plt.close(fig)
 
-        # #############################
-
-        viridis = cm.get_cmap('viridis', n_asset)
-
-        x = np.arange(len(wgt_result_calc))
-        wgt_result_cum = wgt_result_calc.cumsum(axis=1)
-        wgt_guide_cum = wgt_guide_calc.cumsum(axis=1)
+        ######################
+        # plot2 (weight)
         fig = plt.figure()
-        fig.suptitle('Weight Diff')
-        # ax1 = fig.add_subplot(311)
-        ax1 = fig.add_subplot(211)
-        ax1.set_title('base')
-        for i in range(n_asset):
-            if i == 0:
-                ax1.fill_between(x, 0, wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-            else:
-                ax1.fill_between(x, wgt_result_cum[:, i - 1], wgt_result_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-
-        # ax2 = fig.add_subplot(312)
-        ax2 = fig.add_subplot(212)
-        ax2.set_title('result')
-        for i in range(n_asset):
-            if i == 0:
-                ax2.fill_between(x, 0, wgt_guide_cum[:, i], facecolor=viridis.colors[i], alpha=.7)
-            else:
-                ax2.fill_between(x, wgt_guide_cum[:, i - 1], wgt_guide_cum[:, i], facecolor=viridis.colors[i],
-                                 alpha=.7)
-
-        if len(data_for_plot['idx_']) == 4:
-            ax1.axvline(data_for_plot['idx_'][1] // k_days)
-            ax1.axvline(data_for_plot['idx_'][2] // k_days)
-
-            ax2.axvline(data_for_plot['idx_'][1] // k_days)
-            ax2.axvline(data_for_plot['idx_'][2] // k_days)
-
-            ax1.text(x[0], ax1.get_ylim()[1], data_for_plot['date_'][0]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax1.text(data_for_plot['idx_'][1] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][1]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(data_for_plot['idx_'][2] // k_days, ax1.get_ylim()[1], data_for_plot['date_'][2]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-            ax2.text(x[-1], ax1.get_ylim()[1], data_for_plot['date_'][3]
-                     , horizontalalignment='center'
-                     , verticalalignment='center'
-                     , bbox=dict(facecolor='white', alpha=0.7))
-
-        fig.savefig(os.path.join(outpath_plot, '{}_test_wgt_{}.png'.format(ep, suffix)))
+        ax = fig.add_subplot(111)
+        df_pred.plot(kind='area', ax=ax)
+        fig.savefig(os.path.join(outpath_plot, '{}_test_wgt_{}.png'.format(self.global_step, mode)))
         plt.close(fig)
 
     def save_to_optim(self):
