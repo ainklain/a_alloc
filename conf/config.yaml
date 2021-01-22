@@ -73,26 +73,6 @@ model:
     d_v: "(eval) ${model.attention.d_model} // ${model.attention.n_heads}"
     d_ff: 128
 
-  loss_list:
-    - 'y_pf'
-    - 'mdd_pf'
-    - 'logy'
-    - 'wgt_guide'
-    - 'cost'
-
-  pre_loss_wgt:
-    'y_pf': 0.0
-    'mdd_pf': 0.0
-    'logy': 0.0
-    'wgt_guide': 0.5
-    'cost': 10.0
-
-  loss_wgt:
-    'y_pf': 1
-    'mdd_pf': 1.0
-    'logy': 1.0
-    'wgt_guide': 0.02
-    'cost': 1.0
 
 ####################################################################
 # trainer configs (default)
@@ -101,26 +81,33 @@ trainer:
   stage1:
     monitor: 'val_loss'
     patience: 10
+    lr: 0.005
+    loss_wgt:
+      'y_pf': 0.0
+      'mdd_pf': 0.0
+      'logy': 0.0
+      'wgt_guide': 0.5
+      'cost': 10.0
 
   stage2:
     monitor: 'val_loss'
     patience: 20
+    lr: 0.05
+    loss_wgt:
+      'y_pf': 1
+      'mdd_pf': 1.0
+      'logy': 1.0
+      'wgt_guide': 0.02
+      'cost': 1.0
 
   gpus: 1
-  check_val_every_n_epoch: 1  # 20
+  check_val_every_n_epoch: 10  # 20
   gradient_clip_val: 1.
-
+  max_epochs: 1000
   auto_scale_batch_size: None  # None | power | binsearch
+  use_adaptive: False
 
-  adaptive_flag: True
-  adaptive_count: 10
-  es_max_count: 200
   loss_threshold: None  # -1
-  plot_freq: 10
-  save_freq: 20
-  model_init_everytime: False
-
-  num_epochs: 1000
 
 ####################################################################
 # experiment configs (default)
@@ -128,8 +115,6 @@ trainer:
 experiment:
   ii: 3900
   seed: 1000
-  pre_lr: 0.005
-  lr: 0.05
   base_i0: 2000
   cost_rate: 0.003
 

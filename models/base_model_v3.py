@@ -1,5 +1,5 @@
 # renewed from model_attn
-
+from omegaconf import DictConfig
 import copy
 from collections import OrderedDict
 import os
@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 
 import layer
 import torch_utils as tu
-from v_latest.optimizer_v2 import RAdam
+from optimizers.optimizer_v2 import RAdam
+
 
 # ##### for using profiler without error ####
 tu.use_profile()
@@ -223,7 +224,10 @@ class MyModel(pl.LightningModule):
         train_sample = dm.sample('train')
         test_sample = dm.sample('test')
     """
-    def __init__(self, model_cfg, exp_cfg, dm):
+    def __init__(self,
+                 model_cfg: DictConfig,
+                 exp_cfg: DictConfig,
+                 dm: ):
         super(MyModel, self).__init__()
 
         self.model_cfg = model_cfg
@@ -243,16 +247,16 @@ class MyModel(pl.LightningModule):
         self.optim_state_dict = self.state_dict()
         self.current_stage = None
 
-    def set_stage(self, stage=1):
+    def set_stage(self, stage, trainer_cfg):
         assert stage in [1, 2]
         if stage == 1:
-            self.current_stage = 1
-            self.lr = self.exp_cfg.pre_lr
-            self.loss_wgt = self.model_cfg.pre_loss_wgt
+            self.current_stage = stage
+            self.lr = self.trainer_cfg.lr
+            self.loss_wgt = self.trainer_cfg.loss_wgt
         else:
-            self.current_stage = 1
-            self.lr = self.exp_cfg.lr
-            self.loss_wgt = self.model_cfg.loss_wgt
+            self.current_stage = stage
+            self.lr = self.trainer_cfg.lr
+            self.loss_wgt = self.trainer_cfg.loss_wgt
 
     def forward(self, x):
         ########
@@ -289,12 +293,11 @@ class MyModel(pl.LightningModule):
 
         return dist, wgt_, wgt_prev, pred_mu, pred_sigma, wgt_guide
 
-
     @profile
     def shared_step(self, batch):
         ########
         # defined parameter in configs
-        loss_list = self.model_cfg.loss_list
+        loss_list = list(self.loss_wgt.keys())
         mdd_cp = self.exp_cfg.mdd_cp
         cost_rate = self.exp_cfg.cost_rate
         loss_wgt = self.loss_wgt
@@ -336,7 +339,6 @@ class MyModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         losses, losses_dict, _ = self.shared_step(batch)
-        # self.log_dict({"loss": losses, "losses_dict": losses_dict})
         return {"loss": losses}
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
@@ -371,27 +373,17 @@ class MyModel(pl.LightningModule):
             if dataloader_i == 0:
                 for i, batch in enumerate(outputs):
                     val_losses += batch['loss']
-                    print("[valid_step_end]: (val) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
 
             elif dataloader_i == 1:
                 if not self.trainer.running_sanity_check:
                     self.plot(outputs, 'test_insample')
 
-                for i, batch in enumerate(outputs):
-                    test_insample_losses += batch['loss']
-                    print("[valid_step_end]: (test_insample) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
-
             elif dataloader_i == 2:
                 if not self.trainer.running_sanity_check:
                     self.plot(outputs, 'test')
 
-                for i, batch in enumerate(outputs):
-                    test_losses += batch['loss']
-                    print("[valid_step_end]: (test) {} {} {}".format(i, batch['additional']['pred'].shape, batch['additional']['next_y'].shape))
+        self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
 
-        print("loss: {} {} {}".format(val_losses, test_insample_losses, test_losses))
-        # self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
-        # self.log_dict({"val_loss": val_losses})
         return {'val_loss': val_losses}
 
     def infer(self, x, wgt):
@@ -502,8 +494,8 @@ class MyModel(pl.LightningModule):
 
         df_result, df_pred, plot_helper = self.dm.calculate_result(plot_data, ii, mode, cost_rate)
 
-        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '{}_all_data_{}.csv'.format(self.global_step, mode)))
-        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '{}_wgtdaily_{}.csv'.format(self.global_step, mode)))
+        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_all_data_{}.csv'.format(self.current_stage, self.current_epoch, mode)))
+        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_wgtdaily_{}.csv'.format(self.current_stage, self.current_epoch, mode)))
         # df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
 
         ######################
@@ -534,7 +526,7 @@ class MyModel(pl.LightningModule):
             ax2.axvline(x=plot_helper['eval_i'])
             ax2.axvline(x=plot_helper['base_i'])
 
-        fig.savefig(os.path.join(outpath_plot, '{}_test_y_{}.png'.format(self.global_step, mode)))
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_y_{}.png'.format(self.current_stage, self.current_epoch, mode)))
         plt.close(fig)
 
         ######################
@@ -542,7 +534,7 @@ class MyModel(pl.LightningModule):
         fig = plt.figure()
         ax = fig.add_subplot(111)
         df_pred.plot(kind='area', ax=ax)
-        fig.savefig(os.path.join(outpath_plot, '{}_test_wgt_{}.png'.format(self.global_step, mode)))
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_wgt_{}.png'.format(self.current_stage, self.current_epoch, mode)))
         plt.close(fig)
 
     def save_to_optim(self):
@@ -550,6 +542,9 @@ class MyModel(pl.LightningModule):
 
     def load_from_optim(self):
         self.load_state_dict(self.optim_state_dict)
+
+
+class BondFirstModel(MyModel):
 
 
 
