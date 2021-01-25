@@ -49,7 +49,7 @@ def main(cfg: DictConfig):
     ################
     trainer_cfg = cfg.trainer
 
-    if trainer_cfg.use_adaptive:
+    if trainer_cfg.stage1.use:
         # stage 1
         model.set_stage(1, trainer_cfg)
 
@@ -58,7 +58,7 @@ def main(cfg: DictConfig):
             min_delta=0.00,
             patience=trainer_cfg.stage1.patience,
             verbose=False,
-            mode='max',
+            mode='min',
         )
 
         trainer = pl.Trainer(
@@ -75,37 +75,42 @@ def main(cfg: DictConfig):
 
         trainer.fit(model)
 
-    # stage 2
-    model.set_stage(2, trainer_cfg)
+        trainer.test(model, ckpt_path='best')
 
-    early_stop_callback2 = EarlyStopping(
-        monitor=trainer_cfg.stage2.monitor,
-        min_delta=0.00,
-        patience=trainer_cfg.stage2.patience,
-        verbose=False,
-        mode='max'
-    )
+    if trainer_cfg.stage2.use:
+        # stage 2
+        model.set_stage(2, trainer_cfg)
 
-    checkpoint_callback2 = ModelCheckpoint(
-        monitor=trainer_cfg.stage2.monitor,
-        dirpath=cfg.experiment.outpath,
-        filename='{model}-{data}-'.format(model=cfg.model.name, data=cfg.data.name,) + "{epoch:02d}-{val_loss:.2f}",
-        save_top_k=3,
-        mode='min',
-    )
+        early_stop_callback2 = EarlyStopping(
+            monitor=trainer_cfg.stage2.monitor,
+            min_delta=0.00,
+            patience=trainer_cfg.stage2.patience,
+            verbose=True,
+            mode='min'
+        )
 
-    trainer = pl.Trainer(
-        gpus=trainer_cfg.gpus,
-        check_val_every_n_epoch=trainer_cfg.check_val_every_n_epoch,
-        gradient_clip_val=trainer_cfg.gradient_clip_val,
-        auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
-        callbacks=[early_stop_callback2, checkpoint_callback2],
-        logger=logger,
-        max_epochs=trainer_cfg.max_epochs,
-        # reload_dataloaders_every_epoch=True,
-    )
+        checkpoint_callback2 = ModelCheckpoint(
+            monitor=trainer_cfg.stage2.monitor,
+            dirpath=cfg.experiment.outpath,
+            filename='{model}-{data}-'.format(model=cfg.model.name, data=cfg.data.name,) + "{epoch:02d}-{val_loss:.2f}",
+            save_top_k=3,
+            mode='min',
+        )
 
-    trainer.fit(model)
+        trainer = pl.Trainer(
+            gpus=trainer_cfg.gpus,
+            check_val_every_n_epoch=trainer_cfg.check_val_every_n_epoch,
+            gradient_clip_val=trainer_cfg.gradient_clip_val,
+            auto_scale_batch_size=trainer_cfg.auto_scale_batch_size,
+            callbacks=[early_stop_callback2, checkpoint_callback2],
+            logger=logger,
+            max_epochs=trainer_cfg.max_epochs,
+            # reload_dataloaders_every_epoch=True,
+        )
+
+        trainer.fit(model)
+
+        trainer.test(model, ckpt_path='best')
 
 
 def main_wrapper():

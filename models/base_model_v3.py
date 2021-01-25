@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import layer
 import torch_utils as tu
 from optimizers.optimizer_v2 import RAdam
+from dataprocess.dataset_v2 import DatasetManager
 
 
 # ##### for using profiler without error ####
@@ -218,7 +219,7 @@ class Attention(Module):
         return dec_context.view([len(x), -1])
 
 
-class MyModel(pl.LightningModule):
+class BaseModel(pl.LightningModule):
     """
         dm = TestDataManager()
         train_sample = dm.sample('train')
@@ -227,8 +228,8 @@ class MyModel(pl.LightningModule):
     def __init__(self,
                  model_cfg: DictConfig,
                  exp_cfg: DictConfig,
-                 dm: ):
-        super(MyModel, self).__init__()
+                 dm: DatasetManager):
+        super(BaseModel, self).__init__()
 
         self.model_cfg = model_cfg
         self.exp_cfg = exp_cfg
@@ -251,12 +252,12 @@ class MyModel(pl.LightningModule):
         assert stage in [1, 2]
         if stage == 1:
             self.current_stage = stage
-            self.lr = self.trainer_cfg.lr
-            self.loss_wgt = self.trainer_cfg.loss_wgt
+            self.lr = trainer_cfg.stage1.lr
+            self.loss_wgt = trainer_cfg.stage1.loss_wgt
         else:
             self.current_stage = stage
-            self.lr = self.trainer_cfg.lr
-            self.loss_wgt = self.trainer_cfg.loss_wgt
+            self.lr = trainer_cfg.stage2.lr
+            self.loss_wgt = trainer_cfg.stage2.loss_wgt
 
     def forward(self, x):
         ########
@@ -375,16 +376,23 @@ class MyModel(pl.LightningModule):
                     val_losses += batch['loss']
 
             elif dataloader_i == 1:
-                if not self.trainer.running_sanity_check:
-                    self.plot(outputs, 'test_insample')
+                if not self.trainer.running_sanity_check \
+                        and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    self.plot(outputs, 'test_insample', self.current_epoch)
 
             elif dataloader_i == 2:
-                if not self.trainer.running_sanity_check:
-                    self.plot(outputs, 'test')
+                if not self.trainer.running_sanity_check \
+                    and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    for i, batch in enumerate(outputs):
+                        test_losses += batch['loss']
+                    self.plot(outputs, 'test', self.current_epoch)
 
         self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
 
         return {'val_loss': val_losses}
+
+    def test_epoch_end(self, outputs) -> None:
+        self.plot(outputs, 'test', 20000)
 
     def infer(self, x, wgt):
         """
@@ -478,7 +486,7 @@ class MyModel(pl.LightningModule):
 
         return features_perturbed
 
-    def plot(self, outputs: List[dict], mode):
+    def plot(self, outputs: List[dict], mode, current_epoch):
         ########
         # defined parameter in configs
         ii = self.exp_cfg.ii
@@ -494,8 +502,8 @@ class MyModel(pl.LightningModule):
 
         df_result, df_pred, plot_helper = self.dm.calculate_result(plot_data, ii, mode, cost_rate)
 
-        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_all_data_{}.csv'.format(self.current_stage, self.current_epoch, mode)))
-        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_wgtdaily_{}.csv'.format(self.current_stage, self.current_epoch, mode)))
+        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_all_data_{}.csv'.format(self.current_stage, current_epoch, mode)))
+        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_wgtdaily_{}.csv'.format(self.current_stage, current_epoch, mode)))
         # df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
 
         ######################
@@ -526,7 +534,7 @@ class MyModel(pl.LightningModule):
             ax2.axvline(x=plot_helper['eval_i'])
             ax2.axvline(x=plot_helper['base_i'])
 
-        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_y_{}.png'.format(self.current_stage, self.current_epoch, mode)))
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_y_{}.png'.format(self.current_stage, current_epoch, mode)))
         plt.close(fig)
 
         ######################
@@ -534,7 +542,7 @@ class MyModel(pl.LightningModule):
         fig = plt.figure()
         ax = fig.add_subplot(111)
         df_pred.plot(kind='area', ax=ax)
-        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_wgt_{}.png'.format(self.current_stage, self.current_epoch, mode)))
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_wgt_{}.png'.format(self.current_stage, current_epoch, mode)))
         plt.close(fig)
 
     def save_to_optim(self):
@@ -544,7 +552,92 @@ class MyModel(pl.LightningModule):
         self.load_state_dict(self.optim_state_dict)
 
 
-class BondFirstModel(MyModel):
+class CashFirstModel(BaseModel):
+    def __init__(self, *args, **kwargs):
+        super(CashFirstModel, self).__init__(*args, **kwargs)
+
+    def noncash_to_all(self, wgt_, wgt_guide):
+        ########
+        # defined parameter in configs
+        cash_idx = self.exp_cfg.cash_idx
+        wgt_range_min = self.exp_cfg.wgt_range_min
+        wgt_range_max = self.exp_cfg.wgt_range_max
+        ########
+
+        noncash_idx = np.delete(np.arange(wgt_guide.shape[1]), cash_idx)
+
+        wgt_max = torch.tensor(wgt_range_max).to(wgt_)
+        wgt_min = torch.tensor(wgt_range_min).to(wgt_)
+
+
+        # 모델 산출 값만큼 반영하고,
+        # wgt_ = torch.tanh(wgt_)
+        # wgt_ = (1. + wgt_) * wgt_guide[:, noncash_idx]
+        wgt_ = (1. + torch.tanh(wgt_)) * wgt_guide[:]
+        # wgt_ = torch.softmax(wgt_, dim=-1)
+
+        # 먼저 채권 비중 범위로 맞춘 후
+        wgt_ = torch.min(torch.max(wgt_, wgt_min), wgt_max)
+        # wgt_ = torch.max(torch.sigmoid(wgt_) - wgt_min) / (wgt_max - wgt_min)
+        # print(wgt_[:5, :])
+        # 최소 cash 비율 맞추고
+        # wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True), wgt_min_cash)
+        # wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6) * (1 - wgt_rf)
+        wgt_rf = wgt_[:, cash_idx:(cash_idx+1)]
+        wgt_risk = wgt_[:, noncash_idx] / wgt_[:, noncash_idx].sum(dim=-1, keepdim=True) * (1-wgt_rf)
+
+        # 이어붙인다
+        wgt_ = torch.cat([wgt_risk[:, :cash_idx], wgt_rf, wgt_risk[:, cash_idx:]], dim=-1) + 1e-4
+
+        # 이미 합은 1이어야 하지만 혹시 몰라 조정
+        wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
+        return wgt_
+
+
+class CashFirstModel2(BaseModel):
+    def __init__(self, *args, **kwargs):
+        super(CashFirstModel2, self).__init__(*args, **kwargs)
+
+    def noncash_to_all(self, wgt_, wgt_guide):
+        ########
+        # defined parameter in configs
+        cash_idx = self.exp_cfg.cash_idx
+        wgt_range_min = self.exp_cfg.wgt_range_min
+        wgt_range_max = self.exp_cfg.wgt_range_max
+        ########
+
+        noncash_idx = np.delete(np.arange(wgt_guide.shape[1]), cash_idx)
+
+        wgt_max = torch.tensor(wgt_range_max, requires_grad=False).to(wgt_)
+        wgt_min = torch.tensor(wgt_range_min, requires_grad=False).to(wgt_)
+        wgt_avg = (wgt_max + wgt_min) / 2.
+        wgt_range = (wgt_max - wgt_min) / 2.
+
+
+        # 모델 산출 값만큼 반영하고,
+        wgt_ = torch.tanh(wgt_) * wgt_range + wgt_avg  # -inf ~ inf => -1 ~ 1 => range centered
+        # wgt_ = (1. + wgt_) * wgt_guide[:, noncash_idx]
+        # wgt_ = torch.softmax(wgt_, dim=-1)
+
+        # 먼저 채권 비중 범위로 맞춘 후
+        wgt_ = torch.min(torch.max(wgt_, wgt_min), wgt_max)
+        # wgt_ = torch.max(torch.sigmoid(wgt_) - wgt_min) / (wgt_max - wgt_min)
+        # print(wgt_[:5, :])
+        # 최소 cash 비율 맞추고
+        # wgt_rf = torch.max(1 - wgt_.sum(-1, keepdim=True), wgt_min_cash)
+        # wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6) * (1 - wgt_rf)
+        wgt_rf = wgt_[:, cash_idx:(cash_idx+1)]
+        wgt_risk = wgt_[:, noncash_idx] / wgt_[:, noncash_idx].sum(dim=-1, keepdim=True) * (1-wgt_rf)
+
+        # 이어붙인다
+        wgt_ = torch.cat([wgt_risk[:, :cash_idx], wgt_rf, wgt_risk[:, cash_idx:]], dim=-1) + 1e-4
+
+        # 이미 합은 1이어야 하지만 혹시 몰라 조정
+        wgt_ = wgt_ / (wgt_.sum(-1, keepdim=True) + 1e-6)
+
+        return wgt_
+
+
 
 
 

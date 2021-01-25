@@ -1,0 +1,5 @@
+model:
+  name: cash_first2
+
+  allocator:
+    out_dim: "(eval) ${data.num_assets} * 2"

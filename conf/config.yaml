@@ -6,15 +6,19 @@ hydra:
   run:
     dir: out/${model.name}/${experiment.name}/${now:%Y%m%d_%H%M%S}
 
+  sweep:
+    dir: out/multirun/${experiment.name}
+    subdir: ${now:%Y%m%d_%H%M%S}_${hydra.job.override_dirname}_${hydra.job.num}
 
 ####################################################################
 # set configs
 ####################################################################
 defaults:
-  - model_conf@_global_: base
+  - model_conf@_global_: cash_first
   - data_conf@_global_: app
-  - exp_conf@experiment: eq
+  - exp_conf@experiment: l
   - exp_conf/data_exp_conf@experiment: ${defaults.1.data_conf}_${defaults.2.exp_conf}
+  - trainer_conf@_global_: stage2_losswgt_pf
 
 ####################################################################
 # data configs (default)
@@ -79,6 +83,7 @@ model:
 ####################################################################
 trainer:
   stage1:
+    use: True
     monitor: 'val_loss'
     patience: 10
     lr: 0.005
@@ -90,9 +95,10 @@ trainer:
       'cost': 10.0
 
   stage2:
+    use: True
     monitor: 'val_loss'
     patience: 20
-    lr: 0.05
+    lr: ${experiment.lr}
     loss_wgt:
       'y_pf': 1
       'mdd_pf': 1.0
@@ -101,11 +107,10 @@ trainer:
       'cost': 1.0
 
   gpus: 1
-  check_val_every_n_epoch: 10  # 20
+  check_val_every_n_epoch: 1  # 20
   gradient_clip_val: 1.
-  max_epochs: 1000
+  max_epochs: 10000
   auto_scale_batch_size: None  # None | power | binsearch
-  use_adaptive: False
 
   loss_threshold: None  # -1
 
@@ -115,16 +120,18 @@ trainer:
 experiment:
   ii: 3900
   seed: 1000
+
+  # default
   base_i0: 2000
   cost_rate: 0.003
+  lr: 0.05
+  mdd_cp: 0.05
 
-  n_pretrain: 5
   use_guide_wgt_as_prev_x: False  # models / forward_with_loss
+  plot_freq: 10
 
   # data related
   cash_idx: ${data.cash_idx}
 
-
-  log_level: DEBUG
 #  outpath: ./out/${model.name}/${experiment.name}/{now:%Y%m%s_%H%M%S}
   outpath: .    # working directory가 알아서 바뀜... hydra.utils.to_absolute_path or utils.get_original_cwd()

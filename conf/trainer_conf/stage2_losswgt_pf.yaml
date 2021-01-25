@@ -1,0 +1,10 @@
+trainer:
+  stage2:
+    use: True
+#    patience: 5
+    loss_wgt:
+      'y_pf': 1
+      'mdd_pf': 0.0
+      'logy': 0.0
+      'wgt_guide': 0.01
+      'cost': 1.0
