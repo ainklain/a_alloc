@@ -639,5 +639,34 @@ class CashFirstModel2(BaseModel):
 
 
 
+class EpochAdjustModel(BaseModel):
+    def __init__(self, *args, **kwargs):
+        super(EpochAdjustModel, self).__init__(*args, **kwargs)
 
+    def validation_epoch_end(self, multiloader_outputs: List[Any]) -> None:
+        val_losses = 0
+        test_insample_losses = 0
+        test_losses = 0
 
+        for dataloader_i, outputs in enumerate(multiloader_outputs):
+            if dataloader_i == 0:
+                for i, batch in enumerate(outputs):
+                    val_losses += batch['loss']
+
+                val_losses *= (1 + torch.exp(-self.current_epoch))
+
+            elif dataloader_i == 1:
+                if not self.trainer.running_sanity_check \
+                        and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    self.plot(outputs, 'test_insample', self.current_epoch)
+
+            elif dataloader_i == 2:
+                if not self.trainer.running_sanity_check \
+                    and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    for i, batch in enumerate(outputs):
+                        test_losses += batch['loss']
+                    self.plot(outputs, 'test', self.current_epoch)
+
+        self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
+
+        return {'val_loss': val_losses}

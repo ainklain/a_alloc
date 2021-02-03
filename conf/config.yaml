@@ -135,3 +135,8 @@ experiment:
 
 #  outpath: ./out/${model.name}/${experiment.name}/{now:%Y%m%s_%H%M%S}
   outpath: .    # working directory가 알아서 바뀜... hydra.utils.to_absolute_path or utils.get_original_cwd()
+
+logger:
+  path_name: tb_logs
+  name: my_model
+

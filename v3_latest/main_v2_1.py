@@ -28,6 +28,7 @@ class Configs:
     def export(self):
         pass
 
+
 def calc_y(wgt0, y1, cost_r=0.):
     # wgt0: 0 ~ T-1 ,  y1 : 1 ~ T  => 0 ~ T (0번째 값은 0)
     y = dict()
@@ -533,7 +534,6 @@ class Trainer:
             self.run(t)
 
 
-
 # @profile
 @hydra.main(config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
@@ -548,7 +548,6 @@ def main(cfg: DictConfig):
     c = Configs(cfg)
     trainer = Trainer(c, dm)
     trainer.run(cfg.experiment.ii)
-
 
 
 if __name__ == '__main__':

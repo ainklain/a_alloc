@@ -862,8 +862,8 @@ def main(testmode=False, args=None):
                         elif c.cash_idx == 7:
                             data_list = [AssetData('asset_data_kor_ext_20201222.txt'), MacroData()]
                             ii = 3500
-                            c.base_weight = [0.125,] * 8
-                            c.wgt_range_min = [0.01,] * 8
+                            c.base_weight = [0.125, ] * 8
+                            c.wgt_range_min = [0.01, ] * 8
                             c.wgt_range_max = [0.99, ] * 8
                             c.loss_wgt['logy'] = 0.1
 
@@ -890,14 +890,8 @@ def main(testmode=False, args=None):
                     # backtest(c, sampler, suffix)
 
 
-
-def load_and_run(key, model_path):
+def load_and_run(model_path):
     from ast import literal_eval
-
-    base_weight = dict(h=[0.69, 0.2, 0.1, 0.01],
-                       m=[0.4, 0.1, 0.075, 0.425],
-                       l=[0.25, 0.05, 0.05, 0.65],
-                       eq=[0.25, 0.25, 0.25, 0.25])
 
     # key = 'eq'
     # model_path = './out/!test1_eq/3900_0'
@@ -934,7 +928,7 @@ def load_and_run(key, model_path):
     # seed
     tu.set_seed(c.seed)
 
-    data_list = [AplusData('app_data_20201230.txt'), MacroData('macro_data_20210104.txt')]
+    data_list = [AplusData('app_data_new_20210131.txt'), MacroData('macro_data_20210131.txt')]
     dm = DatasetManager(data_list, c.test_days, c.batch_size)
     trainer = Trainer(c, dm)
     trainer.load_model(model_path)
@@ -973,7 +967,7 @@ if __name__ == '__main__':
         main(args=args)
     else:
         assert args.model_path is not None
-        load_and_run(args.base_key, args.model_path)
+        load_and_run(args.model_path)
 
 
         # l: ./out/test_20201222_01_l/3900_0
@@ -986,3 +980,4 @@ if __name__ == '__main__':
 # python -m v20201222.main_v2 --model=default --prefix=newmodel
 # test
 # python -m v20201222.main_v2 --prefix=newmodel2 --test --base_key=eq model_path=./out/test_20201222_01_l/3900_0
+# python -m v20201222.main_v2 --model_load --test --model_path=./out/test_20201222_01_l/3900_0 --model=default

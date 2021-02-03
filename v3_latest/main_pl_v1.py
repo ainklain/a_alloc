@@ -1,4 +1,4 @@
-
+import os
 from omegaconf import DictConfig
 import hydra
 from hydra.utils import to_absolute_path
@@ -35,14 +35,18 @@ def main(cfg: DictConfig):
     ################
     # model
     ################
+    try:
+        model_cls = model_list[cfg.model.name]
+    except KeyError:
+        print("possible model name : {}".format(model_list.keys()))
+        return
 
-    model_cls = model_list[cfg.model.name]
     model = model_cls(model_cfg=cfg.model, exp_cfg=cfg.experiment, dm=dm)
 
     ################
     # logger
     ################
-    logger = TensorBoardLogger("tb_logs", name="my_model")
+    logger = TensorBoardLogger(os.path.join(cfg.experiment.outpath, cfg.logger.path_name), name=cfg.logger.name)
 
     ################
     # trainer
@@ -112,6 +116,8 @@ def main(cfg: DictConfig):
 
         trainer.test(model, ckpt_path='best')
 
+    print("tensorboard --logdir={}".format(os.path.join(cfg.experiment.outpath, cfg.logger.path_name, cfg.logger.name, 'default_0')))
+
 
 def main_wrapper():
     if hasattr(sys, 'ps1'):
@@ -127,6 +133,11 @@ def main_wrapper():
         initialize(config_path="./conf", job_name="test_app")
         cfg = compose(config_name="config")
         print(OmegaConf.to_yaml(cfg))
+
+        cfg.experiment.outpath = "./out/test_app/"  # TODO: 임시... hydra.run.dir에 접근하는 방법 못찾음
+        os.makedirs(cfg.experiment.outpath, exist_ok=True)
+
+        cfg.model.name = 'epoch_adjust'
         main(cfg)
 
     else:
@@ -143,3 +154,6 @@ def main_wrapper():
 
 if __name__ == '__main__':
     main_wrapper()
+
+
+# python -m v3_latest.main_pl_v1 --multirun exp_conf@experiment=l,m,h,eq
