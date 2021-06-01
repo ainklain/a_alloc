@@ -1,5 +1,5 @@
 trainer:
-  stage2:
+  stage1:
     use: True
 #    patience: 5
     loss_wgt:

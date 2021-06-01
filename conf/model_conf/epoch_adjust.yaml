@@ -1,5 +1,5 @@
 model:
-  name: default
+  name: epoch_adjust
 
   allocator:
     out_dim: "(eval) (<replace>experiment.adjusted_num_assets</replace> - 1) * 2"

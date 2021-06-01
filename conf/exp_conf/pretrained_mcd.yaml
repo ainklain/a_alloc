@@ -1,0 +1,7 @@
+
+name: pretrained_mcd
+
+use_pretrained_mcd: True
+pretrained_root_path: "D:/projects/asset_allocation/out/mcd_first/global_asset_bm/20210310_125754"
+pretrained_model_name: 'mcd_first'
+

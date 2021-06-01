@@ -34,11 +34,14 @@ class AddibleData(AbstractData):
         if df is not None:
             self.set_data(df)
 
-    def set_data(self, df, use_lower_columns=True):
+    def set_data(self, df, use_lower_columns=True, excluded_col_idx=None):
         if df is not None:
             self.df = df
             if use_lower_columns:
                 self.df.columns = [col.lower() for col in df.columns]
+
+            if excluded_col_idx is not None:
+                self.df = self.df.loc[:, [col for i, col in enumerate(self.df.columns) if i not in excluded_col_idx]]
 
             self.columns = list(self.df.columns)
             self.idx = list(self.df.index)
@@ -90,18 +93,19 @@ class AddibleData(AbstractData):
 
 
 class DataFromFiles(AddibleData):
-    def __init__(self, file_nm='macro_data_20200615.txt', base_dir=None):
+    def __init__(self, file_nm='macro_data_20200615.txt', base_dir=None, excluded_col_idx=None):
         super().__init__()
         if base_dir is not None:
             self.base_dir = base_dir
-        self.set_data_from_name(file_nm)
+        self.set_data_from_name(file_nm, excluded_col_idx=excluded_col_idx)
 
     def get_file_dir(self, file_nm):
         return os.path.join(self.base_dir, file_nm)
 
-    def set_data_from_name(self, file_nm, use_lower_columns=True):
+    def set_data_from_name(self, file_nm, use_lower_columns=True, excluded_col_idx=None):
         file_dir = self.get_file_dir(file_nm)
-        self.set_data(self.read_data_from_file(file_dir), use_lower_columns)
+        df = self.read_data_from_file(file_dir)
+        self.set_data(df, use_lower_columns=use_lower_columns, excluded_col_idx=excluded_col_idx)
 
         self.file_dir = [file_dir]
 

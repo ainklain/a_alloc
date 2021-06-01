@@ -1,5 +1,5 @@
 model:
-  name: cash_first
+  name: epoch_adjust_cash_first2
 
   allocator:
     out_dim: "(eval) <replace>experiment.adjusted_num_assets</replace> * 2"

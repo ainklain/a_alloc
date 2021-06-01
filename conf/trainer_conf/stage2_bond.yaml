@@ -6,5 +6,5 @@ trainer:
       'y_pf': 1
       'mdd_pf': 0.0
       'logy': 0.0
-      'wgt_guide': 0.01
+      'wgt_guide': 0.00
       'cost': 1.0

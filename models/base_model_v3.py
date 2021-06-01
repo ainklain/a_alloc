@@ -1,3 +1,4 @@
+
 # renewed from model_attn
 from omegaconf import DictConfig
 import copy
@@ -346,6 +347,14 @@ class BaseModel(pl.LightningModule):
         losses, losses_dict, additional = self.shared_step(batch)
         return {"loss": losses, "losses_dict": losses_dict, "additional": additional, "dataloader_idx": dataloader_idx}
 
+    def test_step(self, batch, batch_idx, dataloader_idx):
+        losses, losses_dict, additional = self.shared_step(batch)
+        return {"loss": losses, "losses_dict": losses_dict, "additional": additional, "dataloader_idx": dataloader_idx}
+
+    # def test_step(self, batch, batch_idx):
+    #     losses, losses_dict, additional = self.shared_step(batch)
+    #     return {"loss": losses, "losses_dict": losses_dict, "additional": additional}
+
     def train_dataloader(self) -> DataLoader:
         return self.dm.get_data_loader(self.exp_cfg.ii, 'train')
 
@@ -356,7 +365,12 @@ class BaseModel(pl.LightningModule):
         return [val_dataloader, test_insample_dataloader, test_dataloader]
 
     def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
-        return self.dm.get_data_loader(self.exp_cfg.ii, 'test')
+        val_dataloader = self.dm.get_data_loader(self.exp_cfg.ii, 'eval_seq')
+        test_dataloader = self.dm.get_data_loader(self.exp_cfg.ii, 'test')
+        return [val_dataloader, test_dataloader]
+
+    # def test_dataloader(self) -> Union[DataLoader, List[DataLoader]]:
+    #     return self.dm.get_data_loader(self.exp_cfg.ii, 'test')
 
     def on_train_start(self) -> None:
         print('stage {} train start.'.format(self.current_stage))
@@ -367,6 +381,10 @@ class BaseModel(pl.LightningModule):
 
     def validation_epoch_end(self, multiloader_outputs: List[Any]) -> None:
         val_losses = 0
+        val_loss_cost = 0
+        val_loss_wgt = 0
+        val_loss_y = 0
+
         test_insample_losses = 0
         test_losses = 0
 
@@ -374,6 +392,13 @@ class BaseModel(pl.LightningModule):
             if dataloader_i == 0:
                 for i, batch in enumerate(outputs):
                     val_losses += batch['loss']
+                    val_loss_cost += batch['losses_dict']['cost']
+                    val_loss_wgt += batch['losses_dict']['wgt_guide']
+                    val_loss_y += batch['losses_dict']['y_pf']
+
+                if not self.trainer.running_sanity_check \
+                        and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    self.plot(outputs, 'eval', self.current_epoch)
 
             elif dataloader_i == 1:
                 if not self.trainer.running_sanity_check \
@@ -382,17 +407,31 @@ class BaseModel(pl.LightningModule):
 
             elif dataloader_i == 2:
                 if not self.trainer.running_sanity_check \
-                    and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                        and self.current_epoch % self.exp_cfg.plot_freq == 0:
                     for i, batch in enumerate(outputs):
                         test_losses += batch['loss']
                     self.plot(outputs, 'test', self.current_epoch)
 
-        self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
+        if self.current_stage > 1:
+            self.log_dict({"val_loss": val_losses,
+                           'test_loss': test_losses,
+                           'test_insample_loss': test_insample_losses,
+                           "val_loss_y": val_loss_y,
+                           "val_loss_wgt": val_loss_wgt,
+                           "val_loss_cost": val_loss_cost,
+                           'step': self.current_epoch})
 
-        return {'val_loss': val_losses}
+        return {'val_loss': val_losses * 10 if (self.current_stage > 1) and self.current_epoch <= 10 else val_losses}
 
-    def test_epoch_end(self, outputs) -> None:
-        self.plot(outputs, 'test', 20000)
+    def test_epoch_end(self, multiloader_outputs: List[Any]) -> None:
+        for dataloader_i, outputs in enumerate(multiloader_outputs):
+            if dataloader_i == 0:
+                self.plot(outputs, 'eval', 19000)
+            elif dataloader_i == 1:
+                self.plot(outputs, 'test', 20000)
+
+    # def test_epoch_end(self, outputs) -> None:
+    #     self.plot(outputs, 'test', 20000)
 
     def infer(self, x, wgt):
         """
@@ -545,6 +584,11 @@ class BaseModel(pl.LightningModule):
         fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_wgt_{}.png'.format(self.current_stage, current_epoch, mode)))
         plt.close(fig)
 
+    def custom_histogram_adder(self):
+        # iterating through all parameters
+        for name, params in self.named_parameters():
+            self.logger.experiment.add_histogram(name, params, self.current_epoch)
+
     def save_to_optim(self):
         self.optim_state_dict = copy.deepcopy(self.state_dict())
 
@@ -598,6 +642,57 @@ class CashFirstModel2(BaseModel):
     def __init__(self, *args, **kwargs):
         super(CashFirstModel2, self).__init__(*args, **kwargs)
 
+    def shared_step(self, batch):
+        ########
+        # defined parameter in configs
+        loss_list = list(self.loss_wgt.keys())
+        mdd_cp = self.exp_cfg.mdd_cp
+        cost_rate = self.exp_cfg.cost_rate
+        loss_wgt = self.loss_wgt
+        wgt_loss_alpha = self.exp_cfg.wgt_loss_alpha
+        wgt_loss_alpha2 = self.exp_cfg.wgt_loss_alpha2
+
+        wgt_range_min = self.exp_cfg.wgt_range_min
+        wgt_range_max = self.exp_cfg.wgt_range_max
+        ########
+
+        features, labels, features_prev, labels_prev = self.data_dict_to_list(batch)
+        dist, x, prev_x, pred_mu, pred_sigma, wgt_guide = self([features, features_prev])
+
+        next_logy = labels['logy'].detach().clone()
+        next_y = torch.exp(next_logy) - 1.
+
+        losses_dict = dict()
+        for i_loss, key in enumerate(loss_list):
+            if key == 'y_pf':
+                losses_dict[key] = -((x - wgt_guide) * next_y).sum()
+            elif key == 'mdd_pf':
+                losses_dict[key] = 10 * F.elu(-(x * next_y).sum(dim=1) - mdd_cp, 1e-6).sum()
+            elif key == 'logy':
+                losses_dict[key] = nn.MSELoss(reduction='sum')(pred_mu, labels['logy'])
+            elif key == 'wgt_guide':
+                losses_dict[key] = torch.exp(wgt_loss_alpha * torch.abs(x - wgt_guide)).sum(dim=1).mean()
+
+                out_of_range = torch.clamp(torch.tensor(wgt_range_min).to(x.device) - x, min=0.) + torch.clamp(x - torch.tensor(wgt_range_max).to(x.device), min=0.)
+                losses_dict[key] += torch.exp(wgt_loss_alpha2 * out_of_range.abs().sum(dim=1)).mean()
+            elif key == 'cost':
+                if labels_prev is not None:
+                    next_y_prev = torch.exp(labels_prev['logy']) - 1.
+                    wgt_prev = prev_x * (1 + next_y_prev)
+                    wgt_prev = wgt_prev / wgt_prev.sum(dim=1, keepdim=True)
+                    losses_dict[key] = (torch.abs(x - wgt_prev) * cost_rate).sum().exp()
+                else:
+                    losses_dict[key] = (torch.abs(x - wgt_guide) * cost_rate).sum().exp()
+
+            losses_dict[key] = losses_dict[key] * loss_wgt[key]
+
+        losses = torch.tensor(0, dtype=torch.float32).to(labels['logy'].device)
+        for key in losses_dict.keys():
+            losses += losses_dict[key]
+
+        additional = {'pred': x, 'next_y': next_y, 'guide': wgt_guide}
+        return losses, losses_dict, additional
+
     def noncash_to_all(self, wgt_, wgt_guide):
         ########
         # defined parameter in configs
@@ -637,6 +732,81 @@ class CashFirstModel2(BaseModel):
 
         return wgt_
 
+    def momentum_based_weight(self, wgt_pred, wgt_0, alpha=0.9):
+        """
+        wgt(0) = wgt_0
+        wgt(t) = alpha * wgt(t-1) + (1-alpha) * pred
+        """
+        wgt_pred_new = np.zeros_like(wgt_pred)
+        for i in range(len(wgt_pred)):
+            if i == 0:
+                wgt_pred_new[i] = wgt_0 * alpha + wgt_pred[i] * (1-alpha)
+            else:
+                wgt_pred_new[i] = wgt_pred_new[i-1] * alpha + wgt_pred[i] * (1-alpha)
+
+        return wgt_pred_new
+
+    def plot(self, outputs: List[dict], mode, current_epoch):
+        ########
+        # defined parameter in configs
+        ii = self.exp_cfg.ii
+        cost_rate = self.exp_cfg.cost_rate
+        ########
+
+        ######################
+        # calculate portfolio result through datamanager (dataframe)
+        ######################
+        plot_data = dict()
+        for key in ['next_y', 'pred', 'guide']:
+            plot_data[key] = tu.np_ify(torch.cat([batch['additional'][key] for batch in outputs], dim=0))
+
+        # 여기가 base model과 다른점
+        plot_data['pred'] = self.momentum_based_weight(plot_data['pred'], wgt_0=plot_data['guide'][0], alpha=0.9)
+
+        df_result, df_pred, plot_helper = self.dm.calculate_result(plot_data, ii, mode, cost_rate)
+
+        df_result.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_all_data_{}.csv'.format(self.current_stage, current_epoch, mode)))
+        df_pred.to_csv(os.path.join(self.exp_cfg.outpath, '[stage{}]{}_wgtdaily_{}.csv'.format(self.current_stage, current_epoch, mode)))
+        # df_stats.to_csv(os.path.join(outpath, '{}_stats_{}.csv'.format(ep, suffix)))
+
+        ######################
+        # plot
+        ######################
+
+        outpath_plot = os.path.join(self.exp_cfg.outpath, 'plot')
+        os.makedirs(outpath_plot, exist_ok=True)
+
+        ######################
+        # plot1 (performance)
+
+        fig = plt.figure()
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+        # ax = plt.gca()
+
+        # cumulative price
+        prc = df_result.loc[:, ['p_pred_before_cost', 'p_guide_before_cost', 'p_pred_after_cost', 'p_guide_after_cost']]
+        prc.plot(ax=ax1, logy=True)
+
+        # diff
+        diff = df_result.loc[:, ['p_diff_before_cost', 'p_diff_after_cost']]
+        diff.plot(ax=ax2, logy=True)
+
+        if mode == 'test_insample':
+            ax1.set_title("eval:{}/base:{}".format(plot_helper['eval_d'], plot_helper['base_d']))
+            ax2.axvline(x=plot_helper['eval_i'])
+            ax2.axvline(x=plot_helper['base_i'])
+
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_y_{}.png'.format(self.current_stage, current_epoch, mode)))
+        plt.close(fig)
+
+        ######################
+        # plot2 (weight)
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        df_pred.plot(kind='area', ax=ax)
+        fig.savefig(os.path.join(outpath_plot, '[stage{}]{}_test_wgt_{}.png'.format(self.current_stage, current_epoch, mode)))
+        plt.close(fig)
 
 
 class EpochAdjustModel(BaseModel):
@@ -648,12 +818,20 @@ class EpochAdjustModel(BaseModel):
         test_insample_losses = 0
         test_losses = 0
 
+        val_loss_cost = 0
+        val_loss_wgt = 0
+        val_loss_y = 0
+
         for dataloader_i, outputs in enumerate(multiloader_outputs):
             if dataloader_i == 0:
                 for i, batch in enumerate(outputs):
                     val_losses += batch['loss']
 
-                val_losses *= (1 + torch.exp(-self.current_epoch))
+                    val_loss_cost += batch['losses_dict']['cost']
+                    val_loss_wgt += batch['losses_dict']['wgt_guide']
+                    val_loss_y += batch['losses_dict']['y_pf']
+
+                val_losses *= (1 + torch.exp(torch.tensor(-self.current_epoch).float()))
 
             elif dataloader_i == 1:
                 if not self.trainer.running_sanity_check \
@@ -667,6 +845,74 @@ class EpochAdjustModel(BaseModel):
                         test_losses += batch['loss']
                     self.plot(outputs, 'test', self.current_epoch)
 
-        self.log_dict({"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses})
+        self.log_dict({"losses": {"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses},
+                       "each_loss": {"val_loss_y": val_loss_y,
+                                     "val_loss_wgt": val_loss_wgt,
+                                     "val_loss_cost": val_loss_cost,},
+                       'step': self.current_epoch})
 
         return {'val_loss': val_losses}
+
+
+class EpochAdjustCashFirstModel2(CashFirstModel2):
+    def __init__(self, *args, **kwargs):
+        super(EpochAdjustCashFirstModel2, self).__init__(*args, **kwargs)
+
+    def validation_epoch_end(self, multiloader_outputs: List[Any]) -> None:
+        val_losses = 0
+        test_insample_losses = 0
+        test_losses = 0
+
+        val_loss_cost = 0
+        val_loss_wgt = 0
+        val_loss_y = 0
+
+        for dataloader_i, outputs in enumerate(multiloader_outputs):
+            if dataloader_i == 0:
+                for i, batch in enumerate(outputs):
+                    val_losses += batch['loss']
+
+                    val_loss_cost += batch['losses_dict']['cost']
+                    val_loss_wgt += batch['losses_dict']['wgt_guide']
+                    val_loss_y += batch['losses_dict']['y_pf']
+
+                val_losses *= (1 + torch.exp(torch.tensor(-self.current_epoch).float()))
+
+            elif dataloader_i == 1:
+                if not self.trainer.running_sanity_check \
+                        and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    self.plot(outputs, 'test_insample', self.current_epoch)
+
+            elif dataloader_i == 2:
+                if not self.trainer.running_sanity_check \
+                    and self.current_epoch % self.exp_cfg.plot_freq == 0:
+                    for i, batch in enumerate(outputs):
+                        test_losses += batch['loss']
+                    self.plot(outputs, 'test', self.current_epoch)
+
+        self.log_dict({"losses": {"val_loss": val_losses, 'test_loss': test_losses, 'test_insample_loss': test_insample_losses},
+                       "each_loss": {"val_loss_y": val_loss_y,
+                                     "val_loss_wgt": val_loss_wgt,
+                                     "val_loss_cost": val_loss_cost,},
+                       'step': self.current_epoch})
+
+        return {'val_loss': val_losses}
+
+
+
+class SSLModel(pl.LightningModule):
+    def __init__(self,
+                 model_cfg: DictConfig,
+                 exp_cfg: DictConfig,
+                 dm: DatasetManager):
+        super(SSLModel, self).__init__()
+        self.model_cfg = model_cfg
+        self.exp_cfg = exp_cfg
+        self.dm = dm
+
+
+    def forward(self, x):
+
+        pass
+
+

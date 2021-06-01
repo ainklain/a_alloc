@@ -928,7 +928,7 @@ def load_and_run(model_path):
     # seed
     tu.set_seed(c.seed)
 
-    data_list = [AplusData('app_data_new_20210131.txt'), MacroData('macro_data_20210131.txt')]
+    data_list = [AplusData('app_data_20210331.txt'), MacroData('macro_data_20210331.txt')]
     dm = DatasetManager(data_list, c.test_days, c.batch_size)
     trainer = Trainer(c, dm)
     trainer.load_model(model_path)
@@ -940,7 +940,7 @@ def load_and_run(model_path):
         losses_test, data_for_plot = trainer.test(t, is_insample=is_insample)
         date_dict = trainer.dataset_manager.get_begin_end_info(t, mode)
         data_for_plot.update(date_dict)
-        trainer.plot(30000, data_for_plot, model_path, suffix=mode)
+        trainer.plot(40000, data_for_plot, model_path, suffix=mode)
         print(model_path)
 
 

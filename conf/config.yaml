@@ -14,23 +14,31 @@ hydra:
 # set configs
 ####################################################################
 defaults:
-  - model_conf@_global_: cash_first
-  - data_conf@_global_: app
-  - exp_conf@experiment: l
+#  - model_conf@_global_: cash_first2
+#  - model_conf@_global_: mcd_first
+#  - data_conf@_global_: global_asset
+#  - exp_conf@experiment: pretrained_mcd
+  - model_conf@_global_: cash_first2
+  - data_conf@_global_: emdm
+  - exp_conf@experiment: h
   - exp_conf/data_exp_conf@experiment: ${defaults.1.data_conf}_${defaults.2.exp_conf}
+#  - exp_conf/data_exp_conf@experiment: ${defaults.1.data_conf}_m
   - trainer_conf@_global_: stage2_losswgt_pf
+#  - trainer_conf@_global_: mcd_first
+#  - trainer_conf@_global_: ${defaults.1.data_conf}_${defaults.2.exp_conf}_s1_load
 
 ####################################################################
 # data configs (default)
 ####################################################################
 data:
-  update: 20201230
+  update: 20210228
 
   batch_size: 512
   sampling_freq: 20
   k_days: 20
   label_days: 20
   strategy_days: 250
+  eval_rate: 0.6
 
   retrain_days: 240
   test_days: 5000  # test days
@@ -54,7 +62,7 @@ model:
 
   mcdropout:
     in_dim: ${model.d_model}
-    out_dim: ${data.num_assets}
+    out_dim: "(eval) <replace>experiment.adjusted_num_assets</replace>"
     hidden_dim:
       - 128
       - 128
@@ -63,8 +71,8 @@ model:
 
   allocator:
     # num_assets: {wgt, mean, std} + d_model: {x_emb, attn output}
-    in_dim: "(eval) ${data.num_assets} * 3 + ${model.d_model} * 2"
-    out_dim: "(eval) ${data.num_assets} * 2"
+    in_dim: "(eval) <replace>experiment.adjusted_num_assets</replace> * 3 + ${model.d_model} * 2"
+    out_dim: "(eval) <replace>experiment.adjusted_num_assets</replace> * 2"
     hidden_dim:
       - 128
       - 64
@@ -85,8 +93,8 @@ trainer:
   stage1:
     use: True
     monitor: 'val_loss'
-    patience: 10
-    lr: 0.005
+    patience: 20
+    lr: 0.01
     loss_wgt:
       'y_pf': 0.0
       'mdd_pf': 0.0
@@ -97,7 +105,8 @@ trainer:
   stage2:
     use: True
     monitor: 'val_loss'
-    patience: 20
+    patience: 50
+    warmup: 20
     lr: ${experiment.lr}
     loss_wgt:
       'y_pf': 1
@@ -109,10 +118,10 @@ trainer:
   gpus: 1
   check_val_every_n_epoch: 1  # 20
   gradient_clip_val: 1.
-  max_epochs: 10000
-  auto_scale_batch_size: None  # None | power | binsearch
+  max_epochs: 1000
+  auto_scale_batch_size:   # None | power | binsearch
 
-  loss_threshold: None  # -1
+  loss_threshold:   # -1
 
 ####################################################################
 # experiment configs (default)
@@ -127,11 +136,19 @@ experiment:
   lr: 0.05
   mdd_cp: 0.05
 
+  wgt_loss_alpha: 10 # loss['wgt_guide'] 계산할 때 exponential하게 증가 하게끔 해주는 계수
+  wgt_loss_alpha2: 100 # loss['wgt_guide'] 계산할 때 min/max range를 벗어났을때의 패널티 계수
+
   use_guide_wgt_as_prev_x: False  # models / forward_with_loss
   plot_freq: 10
 
   # data related
-  cash_idx: ${data.cash_idx}
+  excluded_asset_idx:
+
+  num_excluded_assets: "(eval) 0 if ${experiment.excluded_asset_idx} is None else len(${experiment.excluded_asset_idx})"
+  adjusted_num_assets: "(eval) ${data.num_assets} - <replace>experiment.num_excluded_assets</replace>"
+  cash_idx: "(eval) ${data.cash_idx} - len([i for i in (${experiment.excluded_asset_idx} if ${experiment.excluded_asset_idx} is not None else []) if i <= ${data.cash_idx}])"
+#  cash_idx: ${data.cash_idx}
 
 #  outpath: ./out/${model.name}/${experiment.name}/{now:%Y%m%s_%H%M%S}
   outpath: .    # working directory가 알아서 바뀜... hydra.utils.to_absolute_path or utils.get_original_cwd()

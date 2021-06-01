@@ -158,7 +158,7 @@ class MultiTaskDatasetForMultiTimesteps(DatasetForTimeSeriesBase):
                                    for key in self.label_columns_dict.keys()])
 
         if i >= self.default_range[1] or i < self.default_range[0]: # very recent data
-            out['labels'] = out['labels_prev'] # dummy. not used.
+            out['labels'] = out['labels_prev']  # dummy. not used.
             # out['labels'] = dict([(key, labels_base[-1, self.label_columns_idx(key)])
             #                       for key in self.label_columns_dict.keys()])
         else:
@@ -179,10 +179,11 @@ class DatasetManager(DatasetManagerBase):
         dl_train = dm.get_data_loader(700, 'train')
         dl_test = dm.get_data_loader(700, 'test')
     """
-    def __init__(self, data_list, test_days, batch_size, **kwargs):
+    def __init__(self, data_list, test_days, batch_size, eval_rate, **kwargs):
         super(DatasetManager, self).__init__(data_list, 'multitask', **kwargs)
         self.test_days = test_days
         self.batch_size = batch_size
+        self.eval_rate = eval_rate
 
     @property
     def labels_list(self):
@@ -200,7 +201,7 @@ class DatasetManager(DatasetManagerBase):
         default_begin_i, default_end_i = self.dataset.default_range
         default_begin_i = (default_begin_i // self.dataset.k_days + 1) * self.dataset.k_days
 
-        eval_rate = 0.60
+        eval_rate = self.eval_rate
         if mode == 'train':
             begin_i = 0
             end_i = int(base_i * eval_rate) - self.dataset.k_days
@@ -212,6 +213,12 @@ class DatasetManager(DatasetManagerBase):
             end_i = int(base_i * 0.99) - self.dataset.k_days
             batch_size = self.batch_size
             sampler_type = 'random_without_replacement'
+
+        elif mode == 'eval_seq':
+            begin_i = int(base_i * eval_rate)
+            end_i = int(base_i * 0.99) - self.dataset.k_days
+            batch_size = self.batch_size
+            sampler_type = 'sequential_sampler'
 
         elif mode == 'test':
             begin_i = base_i
@@ -245,7 +252,7 @@ class DatasetManager(DatasetManagerBase):
         if mode == 'test':
             idx_list = [params_base['begin_i'], params_base['end_i']-1]
         elif mode == 'test_insample':
-            idx_list = [params_base['begin_i'], int(base_i * 0.6), base_i, params_base['end_i']-1]
+            idx_list = [params_base['begin_i'], int(base_i * self.eval_rate), base_i, params_base['end_i']-1]
 
         date_ = list(np.array(self.dataset.idx)[idx_list])
 
@@ -265,7 +272,9 @@ class DatasetManager(DatasetManagerBase):
         ######################
         params_base = self.mode_params(base_i, mode)
 
-        date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'] + 1)]
+        # date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'] + 1)]
+        date_ = np.array(self.dataset.idx)[params_base['begin_i']:(params_base['end_i'])]
+        # date_ = self.dataset.idx
         date_selected = date_[::k_days]
 
         ######################
@@ -307,11 +316,16 @@ class DatasetManager(DatasetManagerBase):
         df_result = df_result.set_index(date_selected)
 
         # helper value for plot
-        base_d = self.dataset.idx[base_i]
-        plot_helper = {
-            'base_d': base_d,
-            'base_i': list(df_result.index).index(base_d)}
-        plot_helper['eval_i'] = int(plot_helper['base_i'] * params_base['eval_rate'])
-        plot_helper['eval_d'] = list(df_result.index)[plot_helper['eval_i']]
+
+        if mode == 'test_insample':
+            base_d = self.dataset.idx[base_i]
+            plot_helper = {
+                'base_d': base_d,
+                'base_i': list(df_result.index).index(base_d)}
+
+            plot_helper['eval_i'] = int(plot_helper['base_i'] * params_base['eval_rate'])
+            plot_helper['eval_d'] = list(df_result.index)[plot_helper['eval_i']]
+        else:
+            plot_helper = {}
 
         return df_result, df_pred, plot_helper

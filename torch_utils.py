@@ -3,6 +3,7 @@ import numpy as np
 import os
 import random
 import torch
+import os
 
 
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -77,7 +78,7 @@ def load_model(path, model, optimizer):
     for state in optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):
-                state[k] = v.to(tu.device)
+                state[k] = v.to(device)
     model.eval()
     print('models loaded successfully. ({})'.format(path))
     return checkpoint['ep']
@@ -107,3 +108,33 @@ def calc_y(wgt0, y1, cost_r=0.):
     y['after_cost'] = np.insert(np.sum(wgt1, axis=1) - 1 - turnover * cost_r, 0, 0)
 
     return y, turnover
+
+
+def collect_result_file_paths(dir_path):
+
+    result_files = []
+    file_names = os.listdir(dir_path)
+    for name in file_names:
+        file_path = os.path.join(dir_path, name)
+        if os.path.isdir(file_path):
+            result_files += collect_result_file_paths(file_path)
+
+        if '0000' in name:
+            result_files.append(os.path.join(dir_path, name))
+
+    return result_files
+
+
+def collect_result_files(root_path, out_path):
+    """
+    collect_result_files('D:/projects/asset_allocation/out/newmodel_eq', './out/abc')
+    """
+    from shutil import copyfile
+
+    file_paths = collect_result_file_paths(root_path)
+    os.makedirs(out_path, exist_ok=True)
+
+    for file_path in file_paths:
+        new_path = file_path.replace(root_path, out_path)
+        os.makedirs(os.path.split(new_path)[0], exist_ok=True)
+        copyfile(file_path, new_path)

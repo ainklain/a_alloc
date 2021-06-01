@@ -1,0 +1,11 @@
+data:
+  name: emdm
+
+  _target_: v3_latest.dataset.DataManager
+
+  cash_idx: 7
+  num_assets: 8
+
+  path:
+    asset: asset_data_short_${data.update}.txt
+    macro: macro_data_emdm_short_${data.update}.txt

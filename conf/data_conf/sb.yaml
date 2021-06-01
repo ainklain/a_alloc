@@ -1,11 +1,11 @@
 data:
-  name: app
+  name: sb
 
   _target_: v3_latest.dataset.DataManager
 
-  cash_idx: 3
-  num_assets: 4
+  cash_idx: 1
+  num_assets: 2
 
   path:
-    asset: app_data_${data.update}.txt
+    asset: asset_data_sb_${data.update}.txt
     macro: macro_data_${data.update}.txt

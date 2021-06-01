@@ -1,0 +1,14 @@
+trainer:
+  stage1:
+    load_checkpoint: True
+    checkpoint_path: "D:/projects/asset_allocation/out/multirun/app_bond/20210405_115829_experiment.seed=3_2/stage1-cash_first2-app-epoch=79-val_loss=34.99.ckpt"
+
+  stage2:
+    use: True
+#    patience: 5
+    loss_wgt:
+      'y_pf': 10
+      'mdd_pf': 0.0
+      'logy': 0.0
+      'wgt_guide': 0.01
+      'cost': 1.0

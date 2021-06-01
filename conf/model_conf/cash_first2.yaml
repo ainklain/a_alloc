@@ -2,4 +2,4 @@ model:
   name: cash_first2
 
   allocator:
-    out_dim: "(eval) ${data.num_assets} * 2"
+    out_dim: "(eval) <replace>experiment.adjusted_num_assets</replace> * 2"

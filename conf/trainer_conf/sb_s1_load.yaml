@@ -1,0 +1,4 @@
+trainer:
+  stage1:
+    load_checkpoint: True
+    checkpoint_path: "D:/projects/asset_allocation/out/cash_first2/global_us_asset_pretrained_mcd/20210402_074533/stage1-cash_first2-global_asset-epoch=96-val_loss=35.47.ckpt"
